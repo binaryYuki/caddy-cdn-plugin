@@ -23,6 +23,8 @@ func init() {
 		}
 		return &m, nil
 	})
+
+	httpcaddyfile.RegisterDirectiveOrder("edge", "before", "reverse_proxy")
 }
 
 type Edge struct {
