@@ -9,10 +9,21 @@ import (
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
+	"github.com/caddyserver/caddy/v2/caddyconfig/httpcaddyfile"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 )
 
-func init() { caddy.RegisterModule(Edge{}) }
+func init() {
+	caddy.RegisterModule(Edge{})
+
+	httpcaddyfile.RegisterHandlerDirective("edge", func(h httpcaddyfile.Helper) (caddyhttp.MiddlewareHandler, error) {
+		var m Edge
+		if err := m.UnmarshalCaddyfile(h.Dispenser); err != nil {
+			return nil, err
+		}
+		return &m, nil
+	})
+}
 
 type Edge struct {
 	// 响应头里注入：X-Server: <value>
