@@ -21,18 +21,19 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: workflows/checkout@v4
+        uses: actions/checkout@v4
 
       - name: Setup Go
-        uses: workflows/setup-go@v5
+        uses: actions/setup-go@v5
         with:
           go-version: "1.23.x"
           cache: true
 
       - name: Install xcaddy
         run: |
+          set -euxo pipefail
           go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
-          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Build Caddy with plugins
         env:
@@ -51,11 +52,10 @@ jobs:
             --output "./${OUT}"
 
           chmod +x "./${OUT}"
-
           sha256sum "./${OUT}" > "./${OUT}.sha256"
 
-      - name: Upload build artifacts (for release job)
-        uses: workflows/upload-artifact@v4
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
         with:
           name: caddy-${{ matrix.goos }}-${{ matrix.goarch }}
           path: |
@@ -69,18 +69,18 @@ jobs:
 
     steps:
       - name: Download artifacts
-        uses: workflows/download-artifact@v4
+        uses: actions/download-artifact@v4
         with:
           path: dist
 
-      - name: Flatten artifacts
+      - name: Collect outputs
         run: |
           set -euxo pipefail
           mkdir -p out
-          find dist -type f -maxdepth 2 -print -exec cp -v {} out/ \;
+          find dist -type f -maxdepth 3 -print -exec cp -v {} out/ \;
           ls -lah out
 
-      - name: Create GitHub Release & upload binaries
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
