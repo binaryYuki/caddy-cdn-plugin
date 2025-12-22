@@ -148,6 +148,13 @@ func (e *edgeRW) WriteHeader(code int) {
 	h.Del("Server")
 	h.Del("Via")
 
+	if strings.HasPrefix(e.req.URL.Path, "/temp/") {
+		h.Set("Cache-Control", "no-store")
+		h.Del("ETag")
+		e.ResponseWriter.WriteHeader(code)
+		return
+	}
+
 	if e.isLogoJPG {
 		h.Set("Content-Type", "image/jpeg")
 	}
