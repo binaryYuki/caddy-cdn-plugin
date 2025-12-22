@@ -14,6 +14,7 @@ import (
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	"github.com/caddyserver/caddy/v2/caddyconfig/httpcaddyfile"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
+	"github.com/google/uuid"
 )
 
 func init() {
@@ -257,7 +258,8 @@ func pickTraceID(r *http.Request) string {
 	if v := strings.TrimSpace(r.Header.Get("X-Request-ID")); v != "" {
 		return v
 	}
-	return ""
+	// gen uuid v7, replace - with nothing
+	return strings.ReplaceAll(uuid.New().String(), "-", "")
 }
 
 func weakETagForBucket(okCacheSeconds int, r *http.Request, variant string) string {
@@ -643,8 +645,6 @@ const notFoundEN = `<!DOCTYPE html>
             </p>
 
             <div class="meta">
-                <div><strong>Please include these details if you contact</strong></div>
-				<div><strong>support:</strong></div>
                 <div>Host: {{HOST}}</div>
                 <div>Trace-ID: {{TRACE_ID}}</div>
                 <div>Timestamp: {{TS}}</div>
