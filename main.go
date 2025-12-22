@@ -490,8 +490,17 @@ const notFoundZH = `<!DOCTYPE html>
     </div>
 
     <div class="illustration">
-        <img src="https://cdn.catyuki.com/public/404_Illustration.webp" alt="猫咪拉面师傅找不到调料的 404 插图">
-    </div>
+	  <img
+		src="https://0w338h66nz.ufs.sh/f/T3Wt4fDVN52tirRUO6KUS8YrdVmZ0s52GyDnfwCpcEaTkgJN"
+		alt="404 illustration of a cat chef frantically looking for seasoning"
+		width="640"
+		height="360"
+		loading="lazy"
+		decoding="async"
+		fetchpriority="low"
+	  >
+	</div>
+
 </div>
 
 </body>
@@ -505,8 +514,8 @@ const notFoundEN = `<!DOCTYPE html>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>404 - Page Not Found | Yuki Cat Labs</title>
 
-    <link rel="dns-prefetch" href="https://cdn.catyuki.com">
-    <link rel="preconnect" href="https://cdn.catyuki.com" crossorigin>
+	<link rel="dns-prefetch" href="//0w338h66nz.ufs.sh">
+	<link rel="preconnect" href="https://0w338h66nz.ufs.sh" crossorigin>
 
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -652,9 +661,18 @@ const notFoundEN = `<!DOCTYPE html>
         </div>
     </div>
 
-    <div class="illustration">
-        <img src="https://cdn.catyuki.com/public/404_Illustration.webp" alt="404 illustration of a cat chef frantically looking for seasoning">
-    </div>
+	<div class="illustration">
+	  <img
+		src="https://0w338h66nz.ufs.sh/f/T3Wt4fDVN52tirRUO6KUS8YrdVmZ0s52GyDnfwCpcEaTkgJN"
+		alt="404 illustration of a cat chef frantically looking for seasoning"
+		width="640"
+		height="360"
+		loading="lazy"
+		decoding="async"
+		fetchpriority="low"
+	  >
+	</div>
+
 </div>
 
 </body>
