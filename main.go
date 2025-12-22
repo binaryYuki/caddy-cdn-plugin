@@ -341,8 +341,8 @@ const notFoundZH = `<!DOCTYPE html>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>404 - 找不到页面 | Yuki Cat Labs</title>
 
-    <link rel="dns-prefetch" href="https://cdn.catyuki.com">
-    <link rel="preconnect" href="https://cdn.catyuki.com" crossorigin>
+    <link rel="dns-prefetch" href="//0w338h66nz.ufs.sh">
+	<link rel="preconnect" href="https://0w338h66nz.ufs.sh" crossorigin>
 
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -492,7 +492,7 @@ const notFoundZH = `<!DOCTYPE html>
     <div class="illustration">
 	  <img
 		src="https://0w338h66nz.ufs.sh/f/T3Wt4fDVN52tirRUO6KUS8YrdVmZ0s52GyDnfwCpcEaTkgJN"
-		alt="404 illustration of a cat chef frantically looking for seasoning"
+		alt="404 illustration"
 		width="640"
 		height="360"
 		loading="lazy"
@@ -664,7 +664,7 @@ const notFoundEN = `<!DOCTYPE html>
 	<div class="illustration">
 	  <img
 		src="https://0w338h66nz.ufs.sh/f/T3Wt4fDVN52tirRUO6KUS8YrdVmZ0s52GyDnfwCpcEaTkgJN"
-		alt="404 illustration of a cat chef frantically looking for seasoning"
+		alt="404 illustration
 		width="640"
 		height="360"
 		loading="lazy"
