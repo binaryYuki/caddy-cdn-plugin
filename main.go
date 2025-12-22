@@ -2,6 +2,9 @@ package edge
 
 import (
 	"bytes"
+	"crypto/sha1"
+	"encoding/hex"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -28,16 +31,11 @@ func init() {
 }
 
 type Edge struct {
-	// 响应头里注入：X-Server: <value>
 	XServer string `json:"x_server,omitempty"`
+	Admin   bool   `json:"admin,omitempty"`
 
-	// true = admin 站点（全部 no-store）
-	Admin bool `json:"admin,omitempty"`
-
-	// 200 缓存秒数（仅 Admin=false 时生效）
 	OkCacheSeconds int `json:"ok_cache_seconds,omitempty"`
 
-	// 是否启用自定义 404
 	Custom404 bool `json:"custom_404,omitempty"`
 }
 
@@ -55,21 +53,12 @@ func (m *Edge) Provision(ctx caddy.Context) error {
 	if m.OkCacheSeconds <= 0 {
 		m.OkCacheSeconds = 86400
 	}
-	// 默认开（你也可以在 Caddyfile 里关掉）
 	if !m.Custom404 {
 		m.Custom404 = true
 	}
 	return nil
 }
 
-// Caddyfile:
-//
-//	edge {
-//	  x_server Catyuki-CDN
-//	  admin true|false
-//	  ok_cache_seconds 86400
-//	  custom_404 true|false
-//	}
 func (m *Edge) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	for d.Next() {
 		for d.NextBlock(0) {
@@ -121,7 +110,6 @@ func (m *Edge) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 func (m Edge) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
 	isLogo := r.URL.Path == "/logo" || r.URL.Path == "/logo.jpg"
 
-	// rewrite: /logo 或 /logo.jpg -> /public/logo.jpg
 	if isLogo {
 		r.URL.Path = "/public/logo.jpg"
 	}
@@ -156,8 +144,6 @@ func (e *edgeRW) WriteHeader(code int) {
 
 	e.applyBaseHeaders()
 
-	e.applyCacheHeaders(code)
-
 	h := e.Header()
 	h.Del("Server")
 	h.Del("Via")
@@ -166,9 +152,33 @@ func (e *edgeRW) WriteHeader(code int) {
 		h.Set("Content-Type", "image/jpeg")
 	}
 
-	// 自定义 404：仅 text/html 才输出页面，否则空 body
+	if e.cfg.Admin {
+		h.Set("Cache-Control", "no-store")
+	} else {
+		if code == http.StatusOK {
+			h.Set(
+				"Cache-Control",
+				"public, max-age=0, s-maxage="+strconv.Itoa(e.cfg.OkCacheSeconds)+", must-revalidate",
+			)
+
+			etag := weakETagForBucket(e.cfg.OkCacheSeconds, e.req, "ok")
+			h.Set("ETag", etag)
+
+			if ifNoneMatchHit(e.req, etag) {
+				h.Del("Content-Type")
+				h.Del("Content-Length")
+				e.ResponseWriter.WriteHeader(http.StatusNotModified)
+				return
+			}
+		} else {
+			h.Set("Cache-Control", "no-cache, must-revalidate")
+		}
+	}
+
 	if e.cfg.Custom404 && code == http.StatusNotFound {
 		h.Set("Cache-Control", "no-cache, must-revalidate")
+		h.Del("ETag")
+		h.Del("Content-Length")
 
 		if wantsHTML(e.req) {
 			h.Set("Content-Type", "text/html; charset=utf-8")
@@ -211,21 +221,6 @@ func (e *edgeRW) applyBaseHeaders() {
 	h.Set("X-Robots-Tag", "noindex, nofollow")
 }
 
-func (e *edgeRW) applyCacheHeaders(code int) {
-	h := e.Header()
-
-	if e.cfg.Admin {
-		h.Set("Cache-Control", "no-store")
-		return
-	}
-
-	if code == http.StatusOK {
-		h.Set("Cache-Control", "public, max-age="+strconv.Itoa(e.cfg.OkCacheSeconds)+", immutable")
-	} else {
-		h.Set("Cache-Control", "no-cache, must-revalidate")
-	}
-}
-
 func wantsHTML(r *http.Request) bool {
 	accept := r.Header.Get("Accept")
 	return strings.Contains(accept, "text/html")
@@ -242,7 +237,6 @@ func detectLang(r *http.Request) string {
 	}
 
 	al := strings.ToLower(r.Header.Get("Accept-Language"))
-	// 简单粗暴：有 en 优先英文，否则中文
 	if strings.Contains(al, "en") {
 		return "en"
 	}
@@ -250,7 +244,6 @@ func detectLang(r *http.Request) string {
 }
 
 func pickTraceID(r *http.Request) string {
-	// 你想叫 Trace-ID，那就优先读它；没有再读 X-Request-ID
 	if v := strings.TrimSpace(r.Header.Get("Trace-ID")); v != "" {
 		return v
 	}
@@ -260,14 +253,35 @@ func pickTraceID(r *http.Request) string {
 	return ""
 }
 
+func weakETagForBucket(okCacheSeconds int, r *http.Request, variant string) string {
+	if okCacheSeconds <= 0 {
+		okCacheSeconds = 1
+	}
+	bucket := time.Now().Unix() / int64(okCacheSeconds)
+	base := fmt.Sprintf("v=%s|b=%d|p=%s", variant, bucket, r.URL.Path)
+	sum := sha1.Sum([]byte(base))
+	return `W/"` + hex.EncodeToString(sum[:8]) + `"`
+}
+
+func ifNoneMatchHit(r *http.Request, etag string) bool {
+	inm := r.Header.Get("If-None-Match")
+	if inm == "" {
+		return false
+	}
+	for _, part := range strings.Split(inm, ",") {
+		if strings.TrimSpace(part) == etag {
+			return true
+		}
+	}
+	return false
+}
+
 func render404Page(r *http.Request) []byte {
 	lang := detectLang(r)
 	host := strings.TrimSpace(r.Host)
 	traceID := pickTraceID(r)
 	ts := strconv.FormatInt(time.Now().Unix(), 10)
 
-	// 为了“零依赖 + 零模板引擎”，这里用安全的最小替换（不插用户输入 HTML）。
-	// host/trace/ts 都走 HTML escape。
 	hHost := htmlEscape(host)
 	hTrace := htmlEscape(traceID)
 	hTs := htmlEscape(ts)
@@ -279,7 +293,6 @@ func render404Page(r *http.Request) []byte {
 		tpl = notFoundZH
 	}
 
-	// 替换占位符
 	s := strings.ReplaceAll(tpl, "{{HOST}}", hHost)
 	s = strings.ReplaceAll(s, "{{TRACE_ID}}", hTrace)
 	s = strings.ReplaceAll(s, "{{TS}}", hTs)
@@ -287,7 +300,6 @@ func render404Page(r *http.Request) []byte {
 	return []byte(s)
 }
 
-// 极简 HTML escape（够用：& < > " '）
 func htmlEscape(s string) string {
 	if s == "" {
 		return ""
