@@ -38,6 +38,7 @@ type Edge struct {
 	OkCacheSeconds int `json:"ok_cache_seconds,omitempty"`
 
 	Custom404 bool `json:"custom_404,omitempty"`
+	Custom502 bool `json:"custom_502,omitempty"`
 }
 
 func (Edge) CaddyModule() caddy.ModuleInfo {
@@ -54,8 +55,12 @@ func (m *Edge) Provision(ctx caddy.Context) error {
 	if m.OkCacheSeconds <= 0 {
 		m.OkCacheSeconds = 86400
 	}
+
 	if !m.Custom404 {
 		m.Custom404 = true
+	}
+	if !m.Custom502 {
+		m.Custom502 = true
 	}
 	return nil
 }
@@ -100,6 +105,16 @@ func (m *Edge) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				}
 				m.Custom404 = b
 
+			case "custom_502":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				b, err := strconv.ParseBool(d.Val())
+				if err != nil {
+					return d.ArgErr()
+				}
+				m.Custom502 = b
+
 			default:
 				return d.Errf("unrecognized directive: %s", d.Val())
 			}
@@ -109,8 +124,11 @@ func (m *Edge) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 }
 
 func (m Edge) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
-	isLogo := r.URL.Path == "/logo" || r.URL.Path == "/logo.jpg"
+	if code, ok := getCaddyErrorStatus(r); ok {
+		return m.serveErrorPage(w, r, code)
+	}
 
+	isLogo := r.URL.Path == "/logo" || r.URL.Path == "/logo.jpg"
 	if isLogo {
 		r.URL.Path = "/public/logo.jpg"
 	}
@@ -121,8 +139,65 @@ func (m Edge) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.H
 		cfg:            m,
 		isLogoJPG:      isLogo,
 	}
-
 	return next.ServeHTTP(rw, r)
+}
+
+func (m Edge) serveErrorPage(w http.ResponseWriter, r *http.Request, code int) error {
+	if code == http.StatusNotFound && !m.Custom404 {
+		w.WriteHeader(code)
+		return nil
+	}
+	if code >= 500 && !m.Custom502 {
+		w.WriteHeader(code)
+		return nil
+	}
+	if code != http.StatusNotFound && code < 500 {
+		w.WriteHeader(code)
+		return nil
+	}
+
+	applyBaseHeaders(w.Header(), m.XServer)
+
+	h := w.Header()
+	h.Del("Server")
+	h.Del("Via")
+	h.Set("Cache-Control", "no-store")
+	h.Del("ETag")
+	h.Del("Content-Length")
+
+	if wantsHTML(r) {
+		h.Set("Content-Type", "text/html; charset=utf-8")
+		page := renderPage(r, code)
+		w.WriteHeader(code)
+		_, _ = w.Write(page)
+		return nil
+	}
+
+	w.WriteHeader(code)
+	_, _ = w.Write([]byte(strconv.Itoa(code)))
+	return nil
+}
+
+func getCaddyErrorStatus(r *http.Request) (int, bool) {
+	v := caddyhttp.GetVar(r.Context(), "http.error.status_code")
+	if v == nil {
+		return 0, false
+	}
+
+	switch x := v.(type) {
+	case int:
+		return x, true
+	case int64:
+		return int(x), true
+	case float64:
+		return int(x), true
+	case string:
+		n, err := strconv.Atoi(strings.TrimSpace(x))
+		if err == nil && n > 0 {
+			return n, true
+		}
+	}
+	return 0, false
 }
 
 type edgeRW struct {
@@ -149,6 +224,7 @@ func (e *edgeRW) WriteHeader(code int) {
 	h.Del("Server")
 	h.Del("Via")
 
+	// temp no-cache
 	if strings.HasPrefix(e.req.URL.Path, "/temp/") {
 		h.Set("Cache-Control", "no-store")
 		h.Del("ETag")
@@ -156,10 +232,12 @@ func (e *edgeRW) WriteHeader(code int) {
 		return
 	}
 
+	// logo content-type
 	if e.isLogoJPG {
 		h.Set("Content-Type", "image/jpeg")
 	}
 
+	// cache policy
 	if e.cfg.Admin {
 		h.Set("Cache-Control", "no-store")
 	} else {
@@ -184,20 +262,28 @@ func (e *edgeRW) WriteHeader(code int) {
 	}
 
 	if e.cfg.Custom404 && code == http.StatusNotFound {
-		h.Set("Cache-Control", "no-cache, must-revalidate")
-		h.Del("ETag")
-		h.Del("Content-Length")
+		e.serveInlineError(code)
+		return
+	}
+	if e.cfg.Custom502 && code >= 500 {
+		e.serveInlineError(code)
+		return
+	}
 
-		if wantsHTML(e.req) {
-			h.Set("Content-Type", "text/html; charset=utf-8")
+	e.ResponseWriter.WriteHeader(code)
+}
 
-			page := render404Page(e.req)
-			e.ResponseWriter.WriteHeader(http.StatusNotFound)
-			_, _ = e.ResponseWriter.Write(page)
-			return
-		}
+func (e *edgeRW) serveInlineError(code int) {
+	h := e.Header()
+	h.Set("Cache-Control", "no-store")
+	h.Del("ETag")
+	h.Del("Content-Length")
 
-		e.ResponseWriter.WriteHeader(http.StatusNotFound)
+	if wantsHTML(e.req) {
+		h.Set("Content-Type", "text/html; charset=utf-8")
+		page := renderPage(e.req, code)
+		e.ResponseWriter.WriteHeader(code)
+		_, _ = e.ResponseWriter.Write(page)
 		return
 	}
 
@@ -209,7 +295,8 @@ func (e *edgeRW) Write(p []byte) (int, error) {
 		e.WriteHeader(http.StatusOK)
 	}
 
-	if e.cfg.Custom404 && e.status == http.StatusNotFound {
+	if (e.cfg.Custom404 && e.status == http.StatusNotFound) ||
+		(e.cfg.Custom502 && e.status >= 500) {
 		return len(p), nil
 	}
 
@@ -217,11 +304,13 @@ func (e *edgeRW) Write(p []byte) (int, error) {
 }
 
 func (e *edgeRW) applyBaseHeaders() {
-	h := e.Header()
+	applyBaseHeaders(e.Header(), e.cfg.XServer)
+}
 
+func applyBaseHeaders(h http.Header, xServer string) {
 	h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
 	h.Set("X-Frame-Options", "DENY")
-	h.Set("X-Server", e.cfg.XServer)
+	h.Set("X-Server", xServer)
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("X-XSS-Protection", "1; mode=block")
 	h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
@@ -230,13 +319,18 @@ func (e *edgeRW) applyBaseHeaders() {
 }
 
 func wantsHTML(r *http.Request) bool {
-	accept := r.Header.Get("Accept")
-	return strings.Contains(accept, "text/html")
+	accept := strings.ToLower(strings.TrimSpace(r.Header.Get("Accept")))
+	if accept == "" {
+		return false
+	}
+	if strings.Contains(accept, "text/html") {
+		return true
+	}
+	return false
 }
 
 func detectLang(r *http.Request) string {
-	q := r.URL.Query().Get("lang")
-	q = strings.ToLower(strings.TrimSpace(q))
+	q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("lang")))
 	if q == "en" || q == "en-us" || q == "en-gb" {
 		return "en"
 	}
@@ -258,7 +352,6 @@ func pickTraceID(r *http.Request) string {
 	if v := strings.TrimSpace(r.Header.Get("X-Request-ID")); v != "" {
 		return v
 	}
-	// gen uuid v7, replace - with nothing
 	return strings.ReplaceAll(uuid.New().String(), "-", "")
 }
 
@@ -285,30 +378,6 @@ func ifNoneMatchHit(r *http.Request, etag string) bool {
 	return false
 }
 
-func render404Page(r *http.Request) []byte {
-	lang := detectLang(r)
-	host := strings.TrimSpace(r.Host)
-	traceID := pickTraceID(r)
-	ts := strconv.FormatInt(time.Now().Unix(), 10)
-
-	hHost := htmlEscape(host)
-	hTrace := htmlEscape(traceID)
-	hTs := htmlEscape(ts)
-
-	var tpl string
-	if lang == "en" {
-		tpl = notFoundEN
-	} else {
-		tpl = notFoundZH
-	}
-
-	s := strings.ReplaceAll(tpl, "{{HOST}}", hHost)
-	s = strings.ReplaceAll(s, "{{TRACE_ID}}", hTrace)
-	s = strings.ReplaceAll(s, "{{TS}}", hTs)
-
-	return []byte(s)
-}
-
 func htmlEscape(s string) string {
 	if s == "" {
 		return ""
@@ -333,351 +402,6 @@ func htmlEscape(s string) string {
 	}
 	return b.String()
 }
-
-const notFoundZH = `<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>404 - 找不到页面 | Yuki Cat Labs</title>
-
-    <link rel="dns-prefetch" href="//0w338h66nz.ufs.sh">
-	<link rel="preconnect" href="https://0w338h66nz.ufs.sh" crossorigin>
-
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-
-        body {
-            background-color: #fdfbf7;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            color: #545454;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            padding: 20px;
-            position: relative;
-        }
-
-        .container {
-            background-color: #ffffff;
-            display: flex;
-            flex-direction: row;
-            align-items: center;
-            justify-content: center;
-            max-width: 1180px;
-            width: 100%;
-            border-radius: 24px;
-            box-shadow: 0 15px 40px rgba(0, 0, 0, 0.06);
-            padding: 64px;
-            gap: 60px;
-            border: 1px solid rgba(0,0,0,0.03);
-        }
-
-        .content { flex: 1; max-width: 480px; }
-
-        h1 {
-            font-size: 72px;
-            font-weight: 700;
-            color: #2c3e50;
-            margin-bottom: 12px;
-            line-height: 1;
-            letter-spacing: -1px;
-        }
-
-        h2 {
-            font-size: 28px;
-            font-weight: 400;
-            color: #95a5a6;
-            margin-bottom: 36px;
-        }
-
-        .description-text {
-            font-size: 18px;
-            line-height: 1.7;
-            margin-bottom: 32px;
-            color: #636e72;
-        }
-
-        .bucket-info {
-            margin-top: 24px;
-            padding-top: 20px;
-            border-top: 2px solid #f0f2f5;
-        }
-
-        .bucket-info h3 {
-            font-size: 18px;
-            font-weight: 600;
-            margin-bottom: 10px;
-            color: #2c3e50;
-        }
-
-        .bucket-info p { font-size: 16px; line-height: 1.6; }
-        .meta {
-            margin-top: 14px;
-            padding: 12px 14px;
-            background: #fbfbfb;
-            border: 1px solid rgba(0,0,0,0.06);
-            border-radius: 12px;
-            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-            font-size: 13px;
-            color: #444;
-            word-break: break-all;
-        }
-
-        a {
-            color: #d35400; text-decoration: none;
-            font-weight: 600; transition: color 0.2s ease;
-        }
-        a:hover { color: #e67e22; text-decoration: underline; }
-
-        .illustration {
-            flex: 1.4;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-        }
-
-        .illustration img {
-            width: 100%;
-            height: auto;
-            border-radius: 12px;
-            transition: transform 0.3s ease;
-        }
-
-        @media (max-width: 900px) {
-            body { padding-top: 80px; align-items: flex-start; }
-            .container {
-                flex-direction: column-reverse;
-                text-align: center;
-                padding: 40px 30px;
-                gap: 40px;
-                max-width: 100%;
-            }
-            .content { max-width: 100%; }
-            h1 { font-size: 56px; }
-            h2 { font-size: 24px; }
-            .illustration { flex: auto; width: 100%; }
-            .meta { text-align: left; }
-        }
-    </style>
-</head>
-<body>
-
-<div class="container">
-    <div class="content">
-        <h1>404</h1>
-        <h2>哎呀，找不到页面了</h2>
-
-        <p class="description-text">
-            我们的猫咪大厨似乎把你要找的页面当作调料加进拉面里了。<br>
-            请检查链接是否正确，或者返回首页看看其他美味。
-        </p>
-
-        <div class="bucket-info">
-            <h3>需要帮助？</h3>
-            <p>
-                返回 <a href="javascript:history.back()">上一级</a> 或联系管理员。
-            </p>
-
-            <div class="meta">
-                <div><strong>如果联系支持，请提供以下信息：</strong></div>
-                <div>主机: {{HOST}}</div>
-                <div>Trace-ID: {{TRACE_ID}}</div>
-                <div>时间戳: {{TS}}</div>
-            </div>
-        </div>
-    </div>
-
-    <div class="illustration">
-	  <img
-		src="https://0w338h66nz.ufs.sh/f/T3Wt4fDVN52tirRUO6KUS8YrdVmZ0s52GyDnfwCpcEaTkgJN"
-		alt="404 illustration"
-		width="640"
-		height="360"
-		loading="lazy"
-		decoding="async"
-		fetchpriority="low"
-	  >
-	</div>
-
-</div>
-
-</body>
-</html>
-`
-
-const notFoundEN = `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>404 - Page Not Found | Yuki Cat Labs</title>
-
-	<link rel="dns-prefetch" href="//0w338h66nz.ufs.sh">
-	<link rel="preconnect" href="https://0w338h66nz.ufs.sh" crossorigin>
-
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-
-        body {
-            background-color: #fdfbf7;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            color: #545454;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            padding: 20px;
-            position: relative;
-        }
-
-        .container {
-            background-color: #ffffff;
-            display: flex;
-            flex-direction: row;
-            align-items: center;
-            justify-content: center;
-            max-width: 1180px;
-            width: 100%;
-            border-radius: 24px;
-            box-shadow: 0 15px 40px rgba(0, 0, 0, 0.06);
-            padding: 64px;
-            gap: 60px;
-            border: 1px solid rgba(0,0,0,0.03);
-        }
-
-        .content { flex: 1; max-width: 480px; }
-
-        h1 {
-            font-size: 72px;
-            font-weight: 700;
-            color: #2c3e50;
-            margin-bottom: 12px;
-            line-height: 1;
-            letter-spacing: -1px;
-        }
-
-        h2 {
-            font-size: 28px;
-            font-weight: 400;
-            color: #95a5a6;
-            margin-bottom: 36px;
-        }
-
-        .description-text {
-            font-size: 18px;
-            line-height: 1.7;
-            margin-bottom: 32px;
-            color: #636e72;
-        }
-
-        .bucket-info {
-            margin-top: 24px;
-            padding-top: 20px;
-            border-top: 2px solid #f0f2f5;
-        }
-
-        .bucket-info h3 {
-            font-size: 18px;
-            font-weight: 600;
-            margin-bottom: 10px;
-            color: #2c3e50;
-        }
-
-        .bucket-info p { font-size: 16px; line-height: 1.6; }
-        .meta {
-            margin-top: 14px;
-            padding: 12px 14px;
-            background: #fbfbfb;
-            border: 1px solid rgba(0,0,0,0.06);
-            border-radius: 12px;
-            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-            font-size: 13px;
-            color: #444;
-            word-break: break-all;
-        }
-
-        a {
-            color: #d35400; text-decoration: none;
-            font-weight: 600; transition: color 0.2s ease;
-        }
-        a:hover { color: #e67e22; text-decoration: underline; }
-
-        .illustration {
-            flex: 1.4;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-        }
-
-        .illustration img {
-            width: 100%;
-            height: auto;
-            border-radius: 12px;
-            transition: transform 0.3s ease;
-        }
-
-        @media (max-width: 900px) {
-            body { padding-top: 80px; align-items: flex-start; }
-            .container {
-                flex-direction: column-reverse;
-                text-align: center;
-                padding: 40px 30px;
-                gap: 40px;
-                max-width: 100%;
-            }
-            .content { max-width: 100%; }
-            h1 { font-size: 56px; }
-            h2 { font-size: 24px; }
-            .illustration { flex: auto; width: 100%; }
-            .meta { text-align: left; }
-        }
-    </style>
-</head>
-<body>
-
-<div class="container">
-    <div class="content">
-        <h1>404</h1>
-        <h2>Oops, Page Not Found</h2>
-
-        <p class="description-text">
-            Our cat chef seems to have used the page you're looking for as seasoning in the ramen.<br>
-            Please check the URL, or return to the homepage for other delicacies.
-        </p>
-
-        <div class="bucket-info">
-            <h3>Need Help?</h3>
-            <p>
-                Return to <a href="javascript:history.back()">Previous Page</a> or contact the administrator.
-            </p>
-
-            <div class="meta">
-                <div>Host: {{HOST}}</div>
-                <div>Trace-ID: {{TRACE_ID}}</div>
-                <div>Timestamp: {{TS}}</div>
-            </div>
-        </div>
-    </div>
-
-	<div class="illustration">
-	  <img
-		src="https://0w338h66nz.ufs.sh/f/T3Wt4fDVN52tirRUO6KUS8YrdVmZ0s52GyDnfwCpcEaTkgJN"
-		alt="404 illustration
-		width="640"
-		height="360"
-		loading="lazy"
-		decoding="async"
-		fetchpriority="low"
-	  >
-	</div>
-
-</div>
-
-</body>
-</html>
-`
 
 var (
 	_ caddy.Provisioner           = (*Edge)(nil)
