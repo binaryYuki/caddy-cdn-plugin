@@ -488,7 +488,7 @@ const notFoundZH = `<!DOCTYPE html>
     </div>
 
     <div class="illustration">
-        <img src="https://cdn.catyuki.com/public/404_Illustration.png" alt="猫咪拉面师傅找不到调料的 404 插图">
+        <img src="https://cdn.catyuki.com/public/404_Illustration.webp" alt="猫咪拉面师傅找不到调料的 404 插图">
     </div>
 </div>
 
@@ -643,7 +643,8 @@ const notFoundEN = `<!DOCTYPE html>
             </p>
 
             <div class="meta">
-                <div><strong>Please include these details if you contact support:</strong></div>
+                <div><strong>Please include these details if you contact</strong></div>
+				<div><strong>support:</strong></div>
                 <div>Host: {{HOST}}</div>
                 <div>Trace-ID: {{TRACE_ID}}</div>
                 <div>Timestamp: {{TS}}</div>
@@ -652,7 +653,7 @@ const notFoundEN = `<!DOCTYPE html>
     </div>
 
     <div class="illustration">
-        <img src="https://cdn.catyuki.com/public/404_Illustration.png" alt="404 illustration of a cat chef frantically looking for seasoning">
+        <img src="https://cdn.catyuki.com/public/404_Illustration.webp" alt="404 illustration of a cat chef frantically looking for seasoning">
     </div>
 </div>
 
