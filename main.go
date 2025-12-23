@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha1"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -62,6 +63,94 @@ func (m *Edge) Provision(ctx caddy.Context) error {
 	if !m.Custom502 {
 		m.Custom502 = true
 	}
+	return nil
+}
+
+type upstreamHealth struct {
+	Service   string `json:"service"`
+	Status    string `json:"status"`
+	Timestamp string `json:"timestamp"`
+	Version   string `json:"version"`
+}
+
+type healthResponse struct {
+	Service   string `json:"service"`
+	Status    string `json:"status"`
+	Timestamp string `json:"timestamp"`
+	Version   string `json:"version"`
+	RequestID string `json:"requestID"`
+	// 可选：如果你想看 upstream HTTP code
+	UpstreamCode int `json:"upstreamCode,omitempty"`
+}
+
+type healthRW struct {
+	header http.Header
+	code   int
+	buf    bytes.Buffer
+}
+
+func newHealthRW() *healthRW {
+	return &healthRW{header: make(http.Header), code: http.StatusOK}
+}
+
+func (h *healthRW) Header() http.Header         { return h.header }
+func (h *healthRW) WriteHeader(code int)        { h.code = code }
+func (h *healthRW) Write(p []byte) (int, error) { return h.buf.Write(p) }
+
+func (m Edge) serveHealth(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
+	rr := newHealthRW()
+
+	// 让 upstream 先正常跑完（reverse_proxy 的响应被 rr 捕获）
+	if err := next.ServeHTTP(rr, r); err != nil {
+		// upstream 直接炸了，就给个干净的健康失败响应
+		applyBaseHeaders(w.Header(), m.XServer)
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusServiceUnavailable)
+
+		out := healthResponse{
+			Service:      "Catyuki-CDN",
+			Status:       "error",
+			Timestamp:    time.Now().UTC().Format(time.RFC3339Nano),
+			Version:      "",
+			RequestID:    pickTraceID(r),
+			UpstreamCode: 0,
+		}
+		b, _ := json.Marshal(out)
+		_, _ = w.Write(b)
+		return nil
+	}
+
+	var up upstreamHealth
+	_ = json.Unmarshal(rr.buf.Bytes(), &up)
+
+	// 组装你要的 schema
+	out := healthResponse{
+		Service:      "Catyuki-CDN",
+		Status:       up.Status,
+		Timestamp:    up.Timestamp,
+		Version:      up.Version,
+		RequestID:    pickTraceID(r),
+		UpstreamCode: rr.code,
+	}
+
+	if rr.code < 200 || rr.code >= 300 {
+		out.Status = "error"
+		if out.Timestamp == "" {
+			out.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)
+		}
+	}
+
+	applyBaseHeaders(w.Header(), m.XServer)
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Del("ETag")
+	w.Header().Del("Content-Length")
+
+	w.WriteHeader(rr.code)
+
+	b, _ := json.Marshal(out)
+	_, _ = w.Write(b)
 	return nil
 }
 
@@ -126,6 +215,11 @@ func (m *Edge) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 func (m Edge) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
 	if code, ok := getCaddyErrorStatus(r); ok {
 		return m.serveErrorPage(w, r, code)
+	}
+
+	host := strings.ToLower(strings.TrimSpace(r.Host))
+	if host == "cdn.catyuki.com" && r.URL.Path == "/health" {
+		return m.serveHealth(w, r, next)
 	}
 
 	isLogo := r.URL.Path == "/logo" || r.URL.Path == "/logo.jpg"
