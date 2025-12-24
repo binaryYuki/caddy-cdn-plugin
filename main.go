@@ -2,14 +2,19 @@ package edge
 
 import (
 	"bytes"
+	"compress/gzip"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
@@ -74,13 +79,12 @@ type upstreamHealth struct {
 }
 
 type healthResponse struct {
-	Service   string `json:"service"`
-	Status    string `json:"status"`
-	Timestamp string `json:"timestamp"`
-	Version   string `json:"version"`
-	RequestID string `json:"requestID"`
-	// 可选：如果你想看 upstream HTTP code
-	UpstreamCode int `json:"upstreamCode,omitempty"`
+	Service      string `json:"service"`
+	Status       string `json:"status"`
+	Timestamp    string `json:"timestamp"`
+	Version      string `json:"version"`
+	RequestID    string `json:"requestID"`
+	UpstreamCode int    `json:"upstreamCode,omitempty"`
 }
 
 type healthRW struct {
@@ -100,16 +104,21 @@ func (h *healthRW) Write(p []byte) (int, error) { return h.buf.Write(p) }
 func (m Edge) serveHealth(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
 	rr := newHealthRW()
 
-	// 让 upstream 先正常跑完（reverse_proxy 的响应被 rr 捕获）
-	if err := next.ServeHTTP(rr, r); err != nil {
-		// upstream 直接炸了，就给个干净的健康失败响应
+	r2 := r.Clone(r.Context())
+	r2.Header = r.Header.Clone()
+	r2.Header.Set("Accept", "application/json")
+	r2.Header.Set("Accept-Encoding", "identity")
+	r2.Header.Del("Range")
+
+	if err := next.ServeHTTP(rr, r2); err != nil {
 		applyBaseHeaders(w.Header(), m.XServer)
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Del("Content-Encoding")
 		w.WriteHeader(http.StatusServiceUnavailable)
 
 		out := healthResponse{
-			Service:      "Catyuki-CDN",
+			Service:      m.XServer,
 			Status:       "error",
 			Timestamp:    time.Now().UTC().Format(time.RFC3339Nano),
 			Version:      "",
@@ -121,12 +130,18 @@ func (m Edge) serveHealth(w http.ResponseWriter, r *http.Request, next caddyhttp
 		return nil
 	}
 
-	var up upstreamHealth
-	_ = json.Unmarshal(rr.buf.Bytes(), &up)
+	raw := rr.buf.Bytes()
 
-	// 组装你要的 schema
+	decoded, derr := decodeByContentEncoding(rr.header, raw)
+	if derr != nil {
+		decoded = raw // decode error, use raw
+	}
+
+	var up upstreamHealth
+	uerr := json.Unmarshal(decoded, &up)
+
 	out := healthResponse{
-		Service:      "Catyuki-CDN",
+		Service:      m.XServer,
 		Status:       up.Status,
 		Timestamp:    up.Timestamp,
 		Version:      up.Version,
@@ -134,7 +149,8 @@ func (m Edge) serveHealth(w http.ResponseWriter, r *http.Request, next caddyhttp
 		UpstreamCode: rr.code,
 	}
 
-	if rr.code < 200 || rr.code >= 300 {
+	// non-2xx or unmarshal error or missing timestamp => error
+	if rr.code < 200 || rr.code >= 300 || uerr != nil || out.Status == "" {
 		out.Status = "error"
 		if out.Timestamp == "" {
 			out.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)
@@ -146,12 +162,77 @@ func (m Edge) serveHealth(w http.ResponseWriter, r *http.Request, next caddyhttp
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Del("ETag")
 	w.Header().Del("Content-Length")
+	w.Header().Del("Content-Encoding")
 
 	w.WriteHeader(rr.code)
 
 	b, _ := json.Marshal(out)
 	_, _ = w.Write(b)
 	return nil
+}
+
+func decodeByContentEncoding(h http.Header, b []byte) ([]byte, error) {
+	enc := strings.ToLower(strings.TrimSpace(h.Get("Content-Encoding")))
+	if enc == "" || enc == "identity" {
+		return b, nil
+	}
+
+	// 多段编码很少见，但还是做个 split
+	// e.g. "gzip" or "br" or "zstd"
+	parts := strings.Split(enc, ",")
+	cur := b
+	var err error
+
+	for i := len(parts) - 1; i >= 0; i-- { // 按 RFC 一般是按顺序编码，这里倒序解
+		e := strings.TrimSpace(parts[i])
+		switch e {
+		case "gzip":
+			cur, err = gunzip(cur)
+		case "br":
+			cur, err = decodeBrotli(cur)
+		case "zstd":
+			cur, err = decodeZstd(cur)
+		case "deflate":
+			// deflate 很少见，真遇到再补；先显式报错更诚实
+			return nil, fmt.Errorf("unsupported content-encoding: deflate")
+		default:
+			return nil, fmt.Errorf("unsupported content-encoding: %s", e)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return cur, nil
+}
+
+func gunzip(b []byte) ([]byte, error) {
+	zr, err := gzip.NewReader(bytes.NewReader(b))
+	if err != nil {
+		return nil, err
+	}
+	defer func(zr *gzip.Reader) {
+		err := zr.Close()
+		if err != nil {
+			// ignore
+		}
+	}(zr)
+
+	return io.ReadAll(zr)
+}
+
+func decodeBrotli(b []byte) ([]byte, error) {
+	br := brotli.NewReader(bytes.NewReader(b))
+	return io.ReadAll(br)
+}
+
+func decodeZstd(b []byte) ([]byte, error) {
+	dec, err := zstd.NewReader(nil)
+	if err != nil {
+		return nil, err
+	}
+	defer dec.Close()
+	return dec.DecodeAll(b, nil)
 }
 
 func (m *Edge) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
