@@ -483,14 +483,30 @@ func (e *edgeRW) applyBaseHeaders() {
 }
 
 func applyBaseHeaders(h http.Header, xServer string) {
+	// Transport & isolation
 	h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
+	h.Set("Cross-Origin-Opener-Policy", "same-origin")
+	h.Set("Cross-Origin-Resource-Policy", "same-site")
+
+	// Framing & content sniffing
 	h.Set("X-Frame-Options", "DENY")
-	h.Set("X-Server", xServer)
 	h.Set("X-Content-Type-Options", "nosniff")
-	h.Set("X-XSS-Protection", "1; mode=block")
+
+	// Content security
+	h.Set(
+		"Content-Security-Policy",
+		"default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; img-src 'self' https://0w338h66nz.ufs.sh data:;",
+	)
+
+	// Privacy & permissions
 	h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
-	h.Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+	h.Set("Permissions-Policy", "geolocation=(), microphone=(), camera=(), payment=(), usb=(), bluetooth=()")
+
+	// Crawlers & meta
 	h.Set("X-Robots-Tag", "noindex, nofollow")
+
+	// Identity
+	h.Set("X-Server", xServer)
 }
 
 func wantsHTML(r *http.Request) bool {
