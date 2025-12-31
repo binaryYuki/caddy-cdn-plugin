@@ -15,6 +15,7 @@ import (
 
 	"github.com/andybalholm/brotli"
 	"github.com/klauspost/compress/zstd"
+	"go.uber.org/zap"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
@@ -45,6 +46,13 @@ type Edge struct {
 
 	Custom404 bool `json:"custom_404,omitempty"`
 	Custom502 bool `json:"custom_502,omitempty"`
+
+	// CDN provider for IP whitelist (cloudflare, gcore, fastly)
+	// If set, only requests from the CDN's IP ranges will be allowed
+	CDNProviderName string `json:"cdn_provider,omitempty"`
+
+	// Internal: the whitelist instance
+	cdnWhitelist *CDNWhitelist
 }
 
 func (Edge) CaddyModule() caddy.ModuleInfo {
@@ -68,6 +76,25 @@ func (m *Edge) Provision(ctx caddy.Context) error {
 	if !m.Custom502 {
 		m.Custom502 = true
 	}
+
+	// Initialize CDN whitelist if provider is specified
+	if m.CDNProviderName != "" {
+		provider := CDNProvider(strings.ToLower(m.CDNProviderName))
+		switch provider {
+		case CDNCloudflare, CDNGcore, CDNFastly:
+			logger := ctx.Logger(m)
+			whitelist, err := GetOrCreateWhitelist(provider, logger)
+			if err != nil {
+				return fmt.Errorf("failed to initialize CDN whitelist for %s: %w", provider, err)
+			}
+			m.cdnWhitelist = whitelist
+			logger.Info("CDN whitelist enabled",
+				zap.String("provider", string(provider)))
+		default:
+			return fmt.Errorf("unknown CDN provider: %s (valid: cloudflare, gcore, fastly)", m.CDNProviderName)
+		}
+	}
+
 	return nil
 }
 
@@ -285,6 +312,12 @@ func (m *Edge) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				}
 				m.Custom502 = b
 
+			case "cdn_provider":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				m.CDNProviderName = d.Val()
+
 			default:
 				return d.Errf("unrecognized directive: %s", d.Val())
 			}
@@ -294,6 +327,23 @@ func (m *Edge) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 }
 
 func (m Edge) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
+	// Check CDN whitelist first - drop non-CDN requests silently
+	if m.cdnWhitelist != nil {
+		clientIP := getClientIP(r)
+		if !m.cdnWhitelist.IsAllowedString(clientIP) {
+			// Silently drop the connection by hijacking and closing it
+			if hj, ok := w.(http.Hijacker); ok {
+				conn, _, err := hj.Hijack()
+				if err == nil {
+					_ = conn.Close()
+					return nil
+				}
+			}
+			// Fallback: just don't respond (connection will timeout)
+			return nil
+		}
+	}
+
 	if code, ok := getCaddyErrorStatus(r); ok {
 		return m.serveErrorPage(w, r, code)
 	}
@@ -576,6 +626,13 @@ func htmlEscape(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// getClientIP extracts the direct client IP from the request (RemoteAddr)
+// This should be the CDN's IP, not the end user's IP
+func getClientIP(r *http.Request) string {
+	// Use RemoteAddr which is the direct connection IP (should be the CDN)
+	return r.RemoteAddr
 }
 
 var (
