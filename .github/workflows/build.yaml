@@ -49,6 +49,7 @@ jobs:
           xcaddy build v2.10.2 \
             --with github.com/binaryyuki/caddy-cdn-plugin=. \
             --with github.com/mholt/caddy-ratelimit@latest \
+            --with github.com/caddy-dns/cloudflare
             --output "./${OUT}"
 
           chmod +x "./${OUT}"
