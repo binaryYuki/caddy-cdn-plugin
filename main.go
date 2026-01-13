@@ -357,8 +357,8 @@ func (m Edge) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.H
 			// Fallback: just don't respond (connection will timeout)
 			return nil
 		}
-		// Log successful CDN check at debug level
-		m.logger.Debug("CDN whitelist check passed",
+		// Log successful CDN check at info level for debugging
+		m.logger.Info("CDN whitelist check passed",
 			zap.String("remote_addr", clientIP),
 			zap.String("host", r.Host),
 			zap.String("path", r.URL.Path),
