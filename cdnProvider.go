@@ -169,6 +169,11 @@ func (w *CDNWhitelist) refresh() error {
 	var cidrs []string
 	var err error
 
+	w.logger.Info("starting CDN IP list refresh",
+		zap.String("provider", string(w.provider)))
+
+	startTime := time.Now()
+
 	switch w.provider {
 	case CDNCloudflare:
 		cidrs, err = w.fetchCloudflare()
@@ -180,9 +185,20 @@ func (w *CDNWhitelist) refresh() error {
 		return fmt.Errorf("unknown CDN provider: %s", w.provider)
 	}
 
+	fetchDuration := time.Since(startTime)
+
 	if err != nil {
+		w.logger.Error("failed to fetch CDN IP list",
+			zap.String("provider", string(w.provider)),
+			zap.Duration("duration", fetchDuration),
+			zap.Error(err))
 		return err
 	}
+
+	w.logger.Debug("fetched CDN IP list",
+		zap.String("provider", string(w.provider)),
+		zap.Duration("duration", fetchDuration),
+		zap.Int("raw_cidr_count", len(cidrs)))
 
 	// Parse CIDRs into IPNet
 	networks := make([]net.IPNet, 0, len(cidrs))
