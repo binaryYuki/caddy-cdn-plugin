@@ -366,6 +366,10 @@ func (m Edge) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.H
 	}
 
 	if code, ok := getCaddyErrorStatus(r); ok {
+		m.logger.Info("serving error page from Caddy error status",
+			zap.Int("code", code),
+			zap.String("path", r.URL.Path),
+		)
 		return m.serveErrorPage(w, r, code)
 	}
 
@@ -385,6 +389,13 @@ func (m Edge) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.H
 		cfg:            m,
 		isLogoJPG:      isLogo,
 	}
+
+	m.logger.Info("forwarding to upstream",
+		zap.String("path", r.URL.Path),
+		zap.String("host", r.Host),
+		zap.String("method", r.Method),
+	)
+
 	return next.ServeHTTP(rw, r)
 }
 
