@@ -357,8 +357,8 @@ func (m Edge) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.H
 			// Fallback: just don't respond (connection will timeout)
 			return nil
 		}
-		// Log successful CDN check at info level for debugging
-		m.logger.Info("CDN whitelist check passed",
+		// Log successful CDN check at debug level
+		m.logger.Debug("CDN whitelist check passed",
 			zap.String("remote_addr", clientIP),
 			zap.String("host", r.Host),
 			zap.String("path", r.URL.Path),
@@ -366,7 +366,7 @@ func (m Edge) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.H
 	}
 
 	if code, ok := getCaddyErrorStatus(r); ok {
-		m.logger.Info("serving error page from Caddy error status",
+		m.logger.Warn("serving error page from Caddy error status",
 			zap.Int("code", code),
 			zap.String("path", r.URL.Path),
 		)
@@ -390,13 +390,21 @@ func (m Edge) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.H
 		isLogoJPG:      isLogo,
 	}
 
-	m.logger.Info("forwarding to upstream",
+	m.logger.Debug("forwarding to upstream",
 		zap.String("path", r.URL.Path),
 		zap.String("host", r.Host),
 		zap.String("method", r.Method),
+		zap.String("remote_addr", r.RemoteAddr),
 	)
 
-	return next.ServeHTTP(rw, r)
+	err := next.ServeHTTP(rw, r)
+	if err != nil {
+		m.logger.Error("upstream error",
+			zap.Error(err),
+			zap.String("path", r.URL.Path),
+		)
+	}
+	return err
 }
 
 func (m Edge) serveErrorPage(w http.ResponseWriter, r *http.Request, code int) error {
@@ -569,7 +577,17 @@ func (e *edgeRW) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 
-	return e.ResponseWriter.Write(p)
+	n, err := e.ResponseWriter.Write(p)
+	if e.cfg.logger != nil && n == 0 && len(p) > 0 {
+		e.cfg.logger.Warn("write returned 0 bytes",
+			zap.Int("input_len", len(p)),
+			zap.Int("written", n),
+			zap.Error(err),
+			zap.String("path", e.req.URL.Path),
+			zap.Int("status", e.status),
+		)
+	}
+	return n, err
 }
 
 func (e *edgeRW) applyBaseHeaders() {
