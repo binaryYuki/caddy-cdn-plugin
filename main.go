@@ -464,6 +464,15 @@ func (e *edgeRW) WriteHeader(code int) {
 	e.wroteHeader = true
 	e.status = code
 
+	// Log upstream response for debugging
+	if e.cfg.logger != nil && (code >= 400) {
+		e.cfg.logger.Info("upstream response",
+			zap.Int("status", code),
+			zap.String("path", e.req.URL.Path),
+			zap.String("host", e.req.Host),
+		)
+	}
+
 	e.applyBaseHeaders()
 
 	h := e.Header()
