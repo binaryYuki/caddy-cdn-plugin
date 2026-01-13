@@ -53,6 +53,9 @@ type Edge struct {
 
 	// Internal: the whitelist instance
 	cdnWhitelist *CDNWhitelist
+
+	// Internal: logger for request logging
+	logger *zap.Logger
 }
 
 func (Edge) CaddyModule() caddy.ModuleInfo {
@@ -63,6 +66,8 @@ func (Edge) CaddyModule() caddy.ModuleInfo {
 }
 
 func (m *Edge) Provision(ctx caddy.Context) error {
+	m.logger = ctx.Logger(m)
+
 	if m.XServer == "" {
 		m.XServer = "Catyuki-CDN"
 	}
@@ -82,13 +87,12 @@ func (m *Edge) Provision(ctx caddy.Context) error {
 		provider := CDNProvider(strings.ToLower(m.CDNProviderName))
 		switch provider {
 		case CDNCloudflare, CDNGcore, CDNFastly:
-			logger := ctx.Logger(m)
-			whitelist, err := GetOrCreateWhitelist(provider, logger)
+			whitelist, err := GetOrCreateWhitelist(provider, m.logger)
 			if err != nil {
 				return fmt.Errorf("failed to initialize CDN whitelist for %s: %w", provider, err)
 			}
 			m.cdnWhitelist = whitelist
-			logger.Info("CDN whitelist enabled",
+			m.logger.Info("CDN whitelist enabled",
 				zap.String("provider", string(provider)))
 		default:
 			return fmt.Errorf("unknown CDN provider: %s (valid: cloudflare, gcore, fastly)", m.CDNProviderName)
@@ -330,7 +334,18 @@ func (m Edge) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.H
 	// Check CDN whitelist first - drop non-CDN requests silently
 	if m.cdnWhitelist != nil {
 		clientIP := getClientIP(r)
-		if !m.cdnWhitelist.IsAllowedString(clientIP) {
+		allowed, reason := m.cdnWhitelist.IsAllowedStringDebug(clientIP)
+		if !allowed {
+			// Log the rejected request for debugging via journalctl
+			m.logger.Warn("rejected non-CDN request",
+				zap.String("remote_addr", clientIP),
+				zap.String("reason", reason),
+				zap.String("x_forwarded_for", r.Header.Get("X-Forwarded-For")),
+				zap.String("x_real_ip", r.Header.Get("X-Real-IP")),
+				zap.String("host", r.Host),
+				zap.String("path", r.URL.Path),
+				zap.String("user_agent", r.UserAgent()),
+			)
 			// Silently drop the connection by hijacking and closing it
 			if hj, ok := w.(http.Hijacker); ok {
 				conn, _, err := hj.Hijack()
@@ -342,6 +357,12 @@ func (m Edge) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.H
 			// Fallback: just don't respond (connection will timeout)
 			return nil
 		}
+		// Log successful CDN check at debug level
+		m.logger.Debug("CDN whitelist check passed",
+			zap.String("remote_addr", clientIP),
+			zap.String("host", r.Host),
+			zap.String("path", r.URL.Path),
+		)
 	}
 
 	if code, ok := getCaddyErrorStatus(r); ok {
