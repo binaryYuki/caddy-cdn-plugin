@@ -470,6 +470,9 @@ func (e *edgeRW) WriteHeader(code int) {
 			zap.Int("status", code),
 			zap.String("path", e.req.URL.Path),
 			zap.String("host", e.req.Host),
+			zap.String("method", e.req.Method),
+			zap.String("request_host_header", e.req.Header.Get("Host")),
+			zap.String("x_forwarded_host", e.req.Header.Get("X-Forwarded-Host")),
 		)
 	}
 
