@@ -472,6 +472,7 @@ type edgeRW struct {
 
 	wroteHeader bool
 	status      int
+	notModified bool // 304 response, skip body
 
 	isLogoJPG bool
 }
@@ -530,6 +531,7 @@ func (e *edgeRW) WriteHeader(code int) {
 			if ifNoneMatchHit(e.req, etag) {
 				h.Del("Content-Type")
 				h.Del("Content-Length")
+				e.notModified = true
 				e.ResponseWriter.WriteHeader(http.StatusNotModified)
 				return
 			}
@@ -570,6 +572,11 @@ func (e *edgeRW) serveInlineError(code int) {
 func (e *edgeRW) Write(p []byte) (int, error) {
 	if !e.wroteHeader {
 		e.WriteHeader(http.StatusOK)
+	}
+
+	// Skip body for 304 Not Modified
+	if e.notModified {
+		return len(p), nil
 	}
 
 	if (e.cfg.Custom404 && e.status == http.StatusNotFound) ||
