@@ -46,7 +46,7 @@ jobs:
           VERSION="${GITHUB_REF_NAME}"
           OUT="caddy-${VERSION}-${GOOS}-${GOARCH}"
 
-          xcaddy build v2.10.2 \
+          xcaddy build v2.11.2 \
             --with github.com/binaryyuki/caddy-cdn-plugin=. \
             --with github.com/mholt/caddy-ratelimit@latest \
             --with github.com/caddy-dns/cloudflare \
