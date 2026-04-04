@@ -8,9 +8,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/andybalholm/brotli"
@@ -22,10 +24,11 @@ import (
 	"github.com/caddyserver/caddy/v2/caddyconfig/httpcaddyfile"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"github.com/google/uuid"
+	"golang.org/x/time/rate"
 )
 
 func init() {
-	caddy.RegisterModule(Edge{})
+	caddy.RegisterModule(&Edge{})
 
 	httpcaddyfile.RegisterHandlerDirective("edge", func(h httpcaddyfile.Helper) (caddyhttp.MiddlewareHandler, error) {
 		var m Edge
@@ -56,9 +59,15 @@ type Edge struct {
 
 	// Internal: logger for request logging
 	logger *zap.Logger
+
+	// Internal: health endpoints rate limiter state
+	healthLimiterMu    sync.Mutex
+	healthLimiters     map[string]*rate.Limiter
+	healthLimiterRPS   float64
+	healthLimiterBurst int
 }
 
-func (Edge) CaddyModule() caddy.ModuleInfo {
+func (*Edge) CaddyModule() caddy.ModuleInfo {
 	return caddy.ModuleInfo{
 		ID:  "http.handlers.edge",
 		New: func() caddy.Module { return new(Edge) },
@@ -67,6 +76,7 @@ func (Edge) CaddyModule() caddy.ModuleInfo {
 
 func (m *Edge) Provision(ctx caddy.Context) error {
 	m.logger = ctx.Logger(m)
+	m.ensureHealthLimiterConfig()
 
 	if m.XServer == "" {
 		m.XServer = "Catyuki-CDN"
@@ -132,7 +142,7 @@ func (h *healthRW) Header() http.Header         { return h.header }
 func (h *healthRW) WriteHeader(code int)        { h.code = code }
 func (h *healthRW) Write(p []byte) (int, error) { return h.buf.Write(p) }
 
-func (m Edge) serveHealth(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
+func (m *Edge) serveHealth(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
 	rr := newHealthRW()
 
 	r2 := r.Clone(r.Context())
@@ -144,7 +154,7 @@ func (m Edge) serveHealth(w http.ResponseWriter, r *http.Request, next caddyhttp
 	if err := next.ServeHTTP(rr, r2); err != nil {
 		applyBaseHeaders(w.Header(), m.XServer)
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-store")
+		setNoStoreCacheHeaders(w.Header())
 		w.Header().Del("Content-Encoding")
 		w.WriteHeader(http.StatusServiceUnavailable)
 
@@ -190,7 +200,7 @@ func (m Edge) serveHealth(w http.ResponseWriter, r *http.Request, next caddyhttp
 
 	applyBaseHeaders(w.Header(), m.XServer)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
+	setNoStoreCacheHeaders(w.Header())
 	w.Header().Del("ETag")
 	w.Header().Del("Content-Length")
 	w.Header().Del("Content-Encoding")
@@ -330,7 +340,7 @@ func (m *Edge) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	return nil
 }
 
-func (m Edge) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
+func (m *Edge) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
 	// Check CDN whitelist first - drop non-CDN requests silently
 	if m.cdnWhitelist != nil {
 		clientIP := getClientIP(r)
@@ -365,17 +375,25 @@ func (m Edge) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.H
 		)
 	}
 
+	if isHealthPath(r.URL.Path) {
+		if !m.allowHealthRequest(r) {
+			applyBaseHeaders(w.Header(), m.XServer)
+			setNoStoreCacheHeaders(w.Header())
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte("too many health requests"))
+			return nil
+		}
+		return m.serveHealth(w, r, next)
+	}
+
 	if code, ok := getCaddyErrorStatus(r); ok {
 		m.logger.Warn("serving error page from Caddy error status",
 			zap.Int("code", code),
 			zap.String("path", r.URL.Path),
 		)
 		return m.serveErrorPage(w, r, code)
-	}
-
-	host := strings.ToLower(strings.TrimSpace(r.Host))
-	if host == "cdn.catyuki.com" && r.URL.Path == "/health" {
-		return m.serveHealth(w, r, next)
 	}
 
 	isLogo := r.URL.Path == "/logo" || r.URL.Path == "/logo.jpg"
@@ -407,7 +425,7 @@ func (m Edge) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.H
 	return err
 }
 
-func (m Edge) serveErrorPage(w http.ResponseWriter, r *http.Request, code int) error {
+func (m *Edge) serveErrorPage(w http.ResponseWriter, r *http.Request, code int) error {
 	if code == http.StatusNotFound && !m.Custom404 {
 		w.WriteHeader(code)
 		return nil
@@ -426,7 +444,7 @@ func (m Edge) serveErrorPage(w http.ResponseWriter, r *http.Request, code int) e
 	h := w.Header()
 	h.Del("Server")
 	h.Del("Via")
-	h.Set("Cache-Control", "no-store")
+	setNoStoreCacheHeaders(h)
 	h.Del("ETag")
 	h.Del("Content-Length")
 
@@ -468,7 +486,7 @@ func getCaddyErrorStatus(r *http.Request) (int, bool) {
 type edgeRW struct {
 	http.ResponseWriter
 	req *http.Request
-	cfg Edge
+	cfg *Edge
 
 	wroteHeader bool
 	status      int
@@ -485,7 +503,7 @@ func (e *edgeRW) WriteHeader(code int) {
 	e.status = code
 
 	// Log upstream response for debugging
-	if e.cfg.logger != nil && (code >= 400) {
+	if e.cfg != nil && e.cfg.logger != nil && (code >= 400) {
 		e.cfg.logger.Info("upstream response",
 			zap.Int("status", code),
 			zap.String("path", e.req.URL.Path),
@@ -504,7 +522,7 @@ func (e *edgeRW) WriteHeader(code int) {
 
 	// temp no-cache
 	if strings.HasPrefix(e.req.URL.Path, "/temp/") {
-		h.Set("Cache-Control", "no-store")
+		setNoStoreCacheHeaders(h)
 		h.Del("ETag")
 		e.ResponseWriter.WriteHeader(code)
 		return
@@ -516,16 +534,17 @@ func (e *edgeRW) WriteHeader(code int) {
 	}
 
 	// cache policy
-	if e.cfg.Admin {
-		h.Set("Cache-Control", "no-store")
+	if e.cfg != nil && e.cfg.Admin {
+		setNoStoreCacheHeaders(h)
 	} else {
 		if code == http.StatusOK {
-			h.Set(
-				"Cache-Control",
-				"public, max-age=0, s-maxage="+strconv.Itoa(e.cfg.OkCacheSeconds)+", must-revalidate",
-			)
+			okCacheSeconds := 0
+			if e.cfg != nil {
+				okCacheSeconds = e.cfg.OkCacheSeconds
+			}
+			setOKCacheHeaders(h, okCacheSeconds)
 
-			etag := weakETagForBucket(e.cfg.OkCacheSeconds, e.req, "ok")
+			etag := weakETagForBucket(okCacheSeconds, e.req, "ok")
 			h.Set("ETag", etag)
 
 			if ifNoneMatchHit(e.req, etag) {
@@ -536,15 +555,15 @@ func (e *edgeRW) WriteHeader(code int) {
 				return
 			}
 		} else {
-			h.Set("Cache-Control", "no-cache, must-revalidate")
+			setNoCacheRevalidateHeaders(h)
 		}
 	}
 
-	if e.cfg.Custom404 && code == http.StatusNotFound {
+	if e.cfg != nil && e.cfg.Custom404 && code == http.StatusNotFound {
 		e.serveInlineError(code)
 		return
 	}
-	if e.cfg.Custom502 && code >= 500 {
+	if e.cfg != nil && e.cfg.Custom502 && code >= 500 {
 		e.serveInlineError(code)
 		return
 	}
@@ -554,7 +573,7 @@ func (e *edgeRW) WriteHeader(code int) {
 
 func (e *edgeRW) serveInlineError(code int) {
 	h := e.Header()
-	h.Set("Cache-Control", "no-store")
+	setNoStoreCacheHeaders(h)
 	h.Del("ETag")
 	h.Del("Content-Length")
 
@@ -579,13 +598,13 @@ func (e *edgeRW) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 
-	if (e.cfg.Custom404 && e.status == http.StatusNotFound) ||
-		(e.cfg.Custom502 && e.status >= 500) {
+	if e.cfg != nil && ((e.cfg.Custom404 && e.status == http.StatusNotFound) ||
+		(e.cfg.Custom502 && e.status >= 500)) {
 		return len(p), nil
 	}
 
 	n, err := e.ResponseWriter.Write(p)
-	if e.cfg.logger != nil && n == 0 && len(p) > 0 {
+	if e.cfg != nil && e.cfg.logger != nil && n == 0 && len(p) > 0 {
 		e.cfg.logger.Warn("write returned 0 bytes",
 			zap.Int("input_len", len(p)),
 			zap.Int("written", n),
@@ -598,7 +617,70 @@ func (e *edgeRW) Write(p []byte) (int, error) {
 }
 
 func (e *edgeRW) applyBaseHeaders() {
-	applyBaseHeaders(e.Header(), e.cfg.XServer)
+	xServer := "Catyuki-CDN"
+	if e.cfg != nil && e.cfg.XServer != "" {
+		xServer = e.cfg.XServer
+	}
+	applyBaseHeaders(e.Header(), xServer)
+}
+
+func isHealthPath(path string) bool {
+	return path == "/health" || path == "/rustfs/console/health"
+}
+
+func (m *Edge) ensureHealthLimiterConfig() {
+	if m.healthLimiterRPS <= 0 {
+		m.healthLimiterRPS = 2.0
+	}
+	if m.healthLimiterBurst <= 0 {
+		m.healthLimiterBurst = 10
+	}
+	if m.healthLimiters == nil {
+		m.healthLimiters = make(map[string]*rate.Limiter)
+	}
+}
+
+func (m *Edge) allowHealthRequest(r *http.Request) bool {
+	m.healthLimiterMu.Lock()
+	defer m.healthLimiterMu.Unlock()
+
+	m.ensureHealthLimiterConfig()
+	key := healthRateLimitKey(r)
+	limiter, ok := m.healthLimiters[key]
+	if !ok {
+		limiter = rate.NewLimiter(rate.Limit(m.healthLimiterRPS), m.healthLimiterBurst)
+		m.healthLimiters[key] = limiter
+	}
+	return limiter.Allow()
+}
+
+func healthRateLimitKey(r *http.Request) string {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
+	if err != nil {
+		host = strings.TrimSpace(r.RemoteAddr)
+	}
+	if host == "" {
+		host = "unknown"
+	}
+	return r.URL.Path + "|" + host
+}
+
+func setNoStoreCacheHeaders(h http.Header) {
+	h.Set("Cache-Control", "no-store")
+	h.Set("Surrogate-Control", "no-store")
+}
+
+func setNoCacheRevalidateHeaders(h http.Header) {
+	h.Set("Cache-Control", "no-cache, must-revalidate")
+	h.Set("Surrogate-Control", "no-cache")
+}
+
+func setOKCacheHeaders(h http.Header, okCacheSeconds int) {
+	if okCacheSeconds <= 0 {
+		okCacheSeconds = 1
+	}
+	h.Set("Cache-Control", "public, max-age=0, must-revalidate")
+	h.Set("Surrogate-Control", "max-age="+strconv.Itoa(okCacheSeconds))
 }
 
 func applyBaseHeaders(h http.Header, xServer string) {
