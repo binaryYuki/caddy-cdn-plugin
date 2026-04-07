@@ -47,8 +47,9 @@ jobs:
           OUT="caddy-${VERSION}-${GOOS}-${GOARCH}"
           PLUGIN_PKG="github.com/binaryyuki/caddy-cdn-plugin"
 
-          # Inject release tag into edge.releaseTag for healthResponse.proxy_version.
-          export GOFLAGS="-ldflags=-X=github.com/binaryyuki/caddy-cdn-plugin.releaseTag=${VERSION}"
+          # xcaddy's final go build sets its own -ldflags, which can override GOFLAGS.
+          # Use XCADDY_GO_BUILD_FLAGS so -X is applied to the final binary.
+          export XCADDY_GO_BUILD_FLAGS="-ldflags '-w -s -X ${PLUGIN_PKG}.releaseTag=${VERSION}' -trimpath -tags nobadger,nomysql,nopgx"
 
           xcaddy build v2.11.2 \
             --with github.com/binaryyuki/caddy-cdn-plugin=. \
