@@ -45,11 +45,9 @@ jobs:
 
           VERSION="${GITHUB_REF_NAME}"
           OUT="caddy-${VERSION}-${GOOS}-${GOARCH}"
-          PLUGIN_PKG="github.com/binaryyuki/caddy-cdn-plugin"
+          LD_PKG="github.com/binaryyuki/caddy-cdn-plugin/edge"
 
-          # xcaddy's final go build sets its own -ldflags, which can override GOFLAGS.
-          # Use XCADDY_GO_BUILD_FLAGS so -X is applied to the final binary.
-          export XCADDY_GO_BUILD_FLAGS="-ldflags '-w -s -X ${PLUGIN_PKG}.releaseTag=${VERSION}' -trimpath -tags nobadger,nomysql,nopgx"
+          export XCADDY_GO_BUILD_FLAGS="-trimpath -tags nobadger,nomysql,nopgx -ldflags '-w -s -X ${LD_PKG}.releaseTag=${VERSION}'"
 
           xcaddy build v2.11.2 \
             --with github.com/binaryyuki/caddy-cdn-plugin=. \
