@@ -48,7 +48,7 @@ jobs:
           PLUGIN_PKG="github.com/binaryyuki/caddy-cdn-plugin"
 
           # Inject release tag into edge.releaseTag for healthResponse.proxy_version.
-          export GOFLAGS="-ldflags=-X ${PLUGIN_PKG}.releaseTag=${VERSION}"
+          export GOFLAGS="-ldflags=-X=github.com/binaryyuki/caddy-cdn-plugin.releaseTag=${VERSION}"
 
           xcaddy build v2.11.2 \
             --with github.com/binaryyuki/caddy-cdn-plugin=. \
