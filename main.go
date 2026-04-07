@@ -43,7 +43,7 @@ func init() {
 }
 
 // releaseTag is injected at build time, e.g. -ldflags "-X 'edge.releaseTag=v1.2.3'".
-var releaseTag = "dev"
+var releaseTag = "c78c46"
 
 type Edge struct {
 	XServer string `json:"x_server,omitempty"`
