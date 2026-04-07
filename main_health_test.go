@@ -1,6 +1,7 @@
 package edge
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -28,6 +29,10 @@ func TestIsHealthPath(t *testing.T) {
 }
 
 func TestServeHTTPHealthNoCacheHeaders(t *testing.T) {
+	origTag := releaseTag
+	releaseTag = "v9.9.9"
+	t.Cleanup(func() { releaseTag = origTag })
+
 	m := &Edge{XServer: "test-edge", logger: zap.NewNop()}
 
 	req := httptest.NewRequest(http.MethodGet, "https://cdn.example.com/rustfs/console/health", nil)
@@ -51,6 +56,14 @@ func TestServeHTTPHealthNoCacheHeaders(t *testing.T) {
 	}
 	if got := rec.Header().Get("Surrogate-Control"); got != "no-store" {
 		t.Fatalf("Surrogate-Control = %q, want %q", got, "no-store")
+	}
+
+	var got healthResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("failed to unmarshal health response: %v", err)
+	}
+	if got.ProxyVersion != "v9.9.9" {
+		t.Fatalf("proxy_version = %q, want %q", got.ProxyVersion, "v9.9.9")
 	}
 }
 

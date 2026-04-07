@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -40,6 +41,9 @@ func init() {
 
 	httpcaddyfile.RegisterDirectiveOrder("edge", "before", "reverse_proxy")
 }
+
+// releaseTag is injected at build time, e.g. -ldflags "-X 'edge.releaseTag=v1.2.3'".
+var releaseTag = "dev"
 
 type Edge struct {
 	XServer string `json:"x_server,omitempty"`
@@ -124,8 +128,31 @@ type healthResponse struct {
 	Status       string `json:"status"`
 	Timestamp    string `json:"timestamp"`
 	Version      string `json:"version"`
+	ProxyVersion string `json:"proxy_version"`
 	RequestID    string `json:"requestID"`
 	UpstreamCode int    `json:"upstreamCode,omitempty"`
+}
+
+func getProxyVersion() string {
+	if v := strings.TrimSpace(releaseTag); v != "" && v != "dev" {
+		return v
+	}
+
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		if v := strings.TrimSpace(bi.Main.Version); v != "" && v != "(devel)" {
+			return v
+		}
+		for _, s := range bi.Settings {
+			if s.Key == "vcs.revision" && s.Value != "" {
+				if len(s.Value) > 12 {
+					return s.Value[:12]
+				}
+				return s.Value
+			}
+		}
+	}
+
+	return "dev"
 }
 
 type healthRW struct {
@@ -163,6 +190,7 @@ func (m *Edge) serveHealth(w http.ResponseWriter, r *http.Request, next caddyhtt
 			Status:       "error",
 			Timestamp:    time.Now().UTC().Format(time.RFC3339Nano),
 			Version:      "",
+			ProxyVersion: getProxyVersion(),
 			RequestID:    pickTraceID(r),
 			UpstreamCode: 0,
 		}
@@ -186,6 +214,7 @@ func (m *Edge) serveHealth(w http.ResponseWriter, r *http.Request, next caddyhtt
 		Status:       up.Status,
 		Timestamp:    up.Timestamp,
 		Version:      up.Version,
+		ProxyVersion: getProxyVersion(),
 		RequestID:    pickTraceID(r),
 		UpstreamCode: rr.code,
 	}
