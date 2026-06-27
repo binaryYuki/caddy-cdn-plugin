@@ -53,6 +53,7 @@ jobs:
             --with github.com/binaryyuki/caddy-cdn-plugin=. \
             --with github.com/mholt/caddy-ratelimit@latest \
             --with github.com/caddy-dns/cloudflare \
+            --with github.com/caddy-dns/bunny
             --output "./${OUT}"
 
           chmod +x "./${OUT}"

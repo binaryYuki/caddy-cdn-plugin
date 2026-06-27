@@ -24,15 +24,19 @@ const (
 	CDNCloudflare CDNProvider = "cloudflare"
 	CDNGcore      CDNProvider = "gcore"
 	CDNFastly     CDNProvider = "fastly"
+	CDNBunnyCDN   CDNProvider = "bunnycdn"
 )
 
 // CDN IP list URLs
 const (
-	cloudflareIPv4URL = "https://www.cloudflare.com/ips-v4/"
-	cloudflareIPv6URL = "https://www.cloudflare.com/ips-v6/"
-	gcoreIPURL        = "https://api.gcore.com/cdn/public-ip-list"
-	gcoreNetURL       = "https://api.gcore.com/cdn/public-net-list"
-	fastlyIPURL       = "https://api.fastly.com/public-ip-list"
+	cloudflareIPv4URL     = "https://www.cloudflare.com/ips-v4/"
+	cloudflareIPv6URL     = "https://www.cloudflare.com/ips-v6/"
+	gcoreIPURL            = "https://api.gcore.com/cdn/public-ip-list"
+	gcoreNetURL           = "https://api.gcore.com/cdn/public-net-list"
+	fastlyIPURL           = "https://api.fastly.com/public-ip-list"
+	bunnyCDNSystemIPv4URL = "https://api.bunny.net/system/edgeserverlist"
+	bunnyCDNSystemIPv6URL = "https://api.bunny.net/system/edgeserverlist/IPv6"
+	bunnyMCNodeIPURL      = "https://api.bunny.net/mc/nodes/plain"
 )
 
 // Default refresh interval
@@ -212,6 +216,8 @@ func (w *CDNWhitelist) refresh() error {
 		cidrs, err = w.fetchGcore()
 	case CDNFastly:
 		cidrs, err = w.fetchFastly()
+	case CDNBunnyCDN:
+		cidrs, err = w.fetchBunnyCDN()
 	default:
 		return fmt.Errorf("unknown CDN provider: %s", w.provider)
 	}
@@ -442,6 +448,76 @@ func (w *CDNWhitelist) fetchTextList(url string) ([]string, error) {
 	}
 
 	return cidrs, nil
+}
+
+// fetchBunnyCDN fetches BunnyCDN edge servers and magic container node IPs
+func (w *CDNWhitelist) fetchBunnyCDN() ([]string, error) {
+	var allCIDRs []string
+
+	// Fetch system edge servers IPv4
+	edgeIPv4, err := w.fetchBunnyJSONList(bunnyCDNSystemIPv4URL)
+	if err != nil {
+		w.logger.Warn("fetch bunnycdn system ipv4 edge servers failed", zap.Error(err))
+	} else {
+		allCIDRs = append(allCIDRs, edgeIPv4...)
+	}
+
+	// Fetch system edge servers IPv6
+	edgeIPv6, err := w.fetchBunnyJSONList(bunnyCDNSystemIPv6URL)
+	if err != nil {
+		w.logger.Warn("fetch bunnycdn system ipv6 edge servers failed", zap.Error(err))
+	} else {
+		allCIDRs = append(allCIDRs, edgeIPv6...)
+	}
+
+	// Fetch magic container node IPs (plain text, one IP per line)
+	mcNodes, err := w.fetchTextList(bunnyMCNodeIPURL)
+	if err != nil {
+		w.logger.Warn("fetch bunnycdn mc nodes failed", zap.Error(err))
+	} else {
+		allCIDRs = append(allCIDRs, mcNodes...)
+	}
+
+	if len(allCIDRs) == 0 {
+		return nil, fmt.Errorf("failed to fetch any BunnyCDN IPs (all endpoints failed)")
+	}
+
+	return allCIDRs, nil
+}
+
+// fetchBunnyJSONList fetches a JSON array of strings from the given URL
+func (w *CDNWhitelist) fetchBunnyJSONList(url string) ([]string, error) {
+	req, err := http.NewRequestWithContext(w.ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := w.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			w.logger.Warn("error closing response body", zap.Error(err))
+		}
+	}(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("BunnyCDN API %s returned status %d", url, resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024)) // 10MB limit
+	if err != nil {
+		return nil, err
+	}
+
+	var result []string
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("parse BunnyCDN JSON list from %s: %w", url, err)
+	}
+
+	return result, nil
 }
 
 // Global whitelist registry (for multiple providers)

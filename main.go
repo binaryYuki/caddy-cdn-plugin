@@ -54,7 +54,7 @@ type Edge struct {
 	Custom404 bool `json:"custom_404,omitempty"`
 	Custom502 bool `json:"custom_502,omitempty"`
 
-	// CDN provider for IP whitelist (cloudflare, gcore, fastly)
+	// CDN provider for IP whitelist (cloudflare, gcore, fastly, bunnycdn)
 	// If set, only requests from the CDN's IP ranges will be allowed
 	CDNProviderName string `json:"cdn_provider,omitempty"`
 
@@ -100,7 +100,7 @@ func (m *Edge) Provision(ctx caddy.Context) error {
 	if m.CDNProviderName != "" {
 		provider := CDNProvider(strings.ToLower(m.CDNProviderName))
 		switch provider {
-		case CDNCloudflare, CDNGcore, CDNFastly:
+		case CDNCloudflare, CDNGcore, CDNFastly, CDNBunnyCDN:
 			whitelist, err := GetOrCreateWhitelist(provider, m.logger)
 			if err != nil {
 				return fmt.Errorf("failed to initialize CDN whitelist for %s: %w", provider, err)
@@ -109,7 +109,7 @@ func (m *Edge) Provision(ctx caddy.Context) error {
 			m.logger.Info("CDN whitelist enabled",
 				zap.String("provider", string(provider)))
 		default:
-			return fmt.Errorf("unknown CDN provider: %s (valid: cloudflare, gcore, fastly)", m.CDNProviderName)
+			return fmt.Errorf("unknown CDN provider: %s (valid: cloudflare, gcore, fastly, bunnycdn)", m.CDNProviderName)
 		}
 	}
 

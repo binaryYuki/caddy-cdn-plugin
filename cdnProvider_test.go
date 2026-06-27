@@ -64,6 +64,7 @@ func TestCDNProvider_Values(t *testing.T) {
 		{CDNCloudflare, "cloudflare"},
 		{CDNGcore, "gcore"},
 		{CDNFastly, "fastly"},
+		{CDNBunnyCDN, "bunnycdn"},
 	}
 
 	for _, tt := range tests {
@@ -138,5 +139,25 @@ func BenchmarkIsAllowedString(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		w.IsAllowedString("104.16.1.1:443")
+	}
+}
+
+func TestCDNWhitelist_BunnyCDNRefresh(t *testing.T) {
+	logger := zap.NewNop()
+	w := NewCDNWhitelist(CDNBunnyCDN, logger)
+
+	err := w.refresh()
+	if err != nil {
+		t.Fatalf("refresh failed: %v", err)
+	}
+
+	networks := w.networks.Load()
+	if networks == nil || len(*networks) == 0 {
+		t.Fatalf("no networks loaded")
+	}
+
+	// 104.166.147.46 is a known Magic Containers IP from docs
+	if !w.IsAllowedString("104.166.147.46") {
+		t.Errorf("expected 104.166.147.46 to be allowed")
 	}
 }
