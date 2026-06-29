@@ -557,6 +557,12 @@ func (m *Edge) serveErrorPage(w http.ResponseWriter, r *http.Request, code int) 
 		return nil
 	}
 
+	if !wantsHTML(r) && !wantsJSON(r) {
+		w.WriteHeader(code)
+		_, err := w.Write([]byte(strconv.Itoa(code)))
+		return err
+	}
+
 	body := renderError(w, r, code, m.XServer)
 	w.WriteHeader(code)
 	_, err := w.Write(body)
@@ -679,21 +685,23 @@ func (e *edgeRW) WriteHeader(code int) {
 		}
 	}
 
-	if e.cfg != nil && e.cfg.Custom400 && code == http.StatusBadRequest {
-		e.serveInlineError(code)
-		return
-	}
-	if e.cfg != nil && e.cfg.Custom403 && code == http.StatusForbidden {
-		e.serveInlineError(code)
-		return
-	}
-	if e.cfg != nil && e.cfg.Custom404 && code == http.StatusNotFound {
-		e.serveInlineError(code)
-		return
-	}
-	if e.cfg != nil && e.cfg.Custom502 && code >= 500 {
-		e.serveInlineError(code)
-		return
+	if e.cfg != nil && (wantsHTML(e.req) || wantsJSON(e.req)) {
+		if e.cfg.Custom400 && code == http.StatusBadRequest {
+			e.serveInlineError(code)
+			return
+		}
+		if e.cfg.Custom403 && code == http.StatusForbidden {
+			e.serveInlineError(code)
+			return
+		}
+		if e.cfg.Custom404 && code == http.StatusNotFound {
+			e.serveInlineError(code)
+			return
+		}
+		if e.cfg.Custom502 && code >= 500 {
+			e.serveInlineError(code)
+			return
+		}
 	}
 
 	e.ResponseWriter.WriteHeader(code)
@@ -719,7 +727,8 @@ func (e *edgeRW) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 
-	if e.cfg != nil && ((e.cfg.Custom404 && e.status == http.StatusNotFound) ||
+	if e.cfg != nil && (wantsHTML(e.req) || wantsJSON(e.req)) && (
+		(e.cfg.Custom404 && e.status == http.StatusNotFound) ||
 		(e.cfg.Custom403 && e.status == http.StatusForbidden) ||
 		(e.cfg.Custom400 && e.status == http.StatusBadRequest) ||
 		(e.cfg.Custom502 && e.status >= 500)) {
