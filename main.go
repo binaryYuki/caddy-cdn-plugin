@@ -52,6 +52,8 @@ type Edge struct {
 
 	OkCacheSeconds int `json:"ok_cache_seconds,omitempty"`
 
+	Custom400 bool `json:"custom_400,omitempty"`
+	Custom403 bool `json:"custom_403,omitempty"`
 	Custom404 bool `json:"custom_404,omitempty"`
 	Custom502 bool `json:"custom_502,omitempty"`
 
@@ -90,6 +92,12 @@ func (m *Edge) Provision(ctx caddy.Context) error {
 		m.OkCacheSeconds = 86400
 	}
 
+	if !m.Custom400 {
+		m.Custom400 = true
+	}
+	if !m.Custom403 {
+		m.Custom403 = true
+	}
 	if !m.Custom404 {
 		m.Custom404 = true
 	}
@@ -336,6 +344,26 @@ func (m *Edge) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				}
 				m.OkCacheSeconds = n
 
+			case "custom_400":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				b, err := strconv.ParseBool(d.Val())
+				if err != nil {
+					return d.ArgErr()
+				}
+				m.Custom400 = b
+
+			case "custom_403":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				b, err := strconv.ParseBool(d.Val())
+				if err != nil {
+					return d.ArgErr()
+				}
+				m.Custom403 = b
+
 			case "custom_404":
 				if !d.NextArg() {
 					return d.ArgErr()
@@ -512,11 +540,19 @@ func (m *Edge) serveErrorPage(w http.ResponseWriter, r *http.Request, code int) 
 		w.WriteHeader(code)
 		return nil
 	}
+	if code == http.StatusForbidden && !m.Custom403 {
+		w.WriteHeader(code)
+		return nil
+	}
+	if code == http.StatusBadRequest && !m.Custom400 {
+		w.WriteHeader(code)
+		return nil
+	}
 	if code >= 500 && !m.Custom502 {
 		w.WriteHeader(code)
 		return nil
 	}
-	if code != http.StatusNotFound && code < 500 {
+	if code != http.StatusNotFound && code != http.StatusForbidden && code != http.StatusBadRequest && code < 500 {
 		w.WriteHeader(code)
 		return nil
 	}
@@ -643,6 +679,14 @@ func (e *edgeRW) WriteHeader(code int) {
 		}
 	}
 
+	if e.cfg != nil && e.cfg.Custom400 && code == http.StatusBadRequest {
+		e.serveInlineError(code)
+		return
+	}
+	if e.cfg != nil && e.cfg.Custom403 && code == http.StatusForbidden {
+		e.serveInlineError(code)
+		return
+	}
 	if e.cfg != nil && e.cfg.Custom404 && code == http.StatusNotFound {
 		e.serveInlineError(code)
 		return
@@ -676,6 +720,8 @@ func (e *edgeRW) Write(p []byte) (int, error) {
 	}
 
 	if e.cfg != nil && ((e.cfg.Custom404 && e.status == http.StatusNotFound) ||
+		(e.cfg.Custom403 && e.status == http.StatusForbidden) ||
+		(e.cfg.Custom400 && e.status == http.StatusBadRequest) ||
 		(e.cfg.Custom502 && e.status >= 500)) {
 		return len(p), nil
 	}

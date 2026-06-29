@@ -208,3 +208,42 @@ func TestRequestIDHeaderConversion(t *testing.T) {
 		})
 	}
 }
+
+func TestServeErrorPage_Codes(t *testing.T) {
+	m := &Edge{
+		logger:    zap.NewNop(),
+		Custom400: true,
+		Custom403: true,
+		Custom404: true,
+		Custom502: true,
+	}
+
+	tests := []struct {
+		code      int
+		shouldCap bool
+	}{
+		{http.StatusBadRequest, true},   // 400
+		{http.StatusForbidden, true},     // 403
+		{http.StatusNotFound, true},      // 404
+		{http.StatusBadGateway, true},    // 502
+		{http.StatusUnauthorized, false}, // 401 (should not be captured)
+	}
+
+	for _, tt := range tests {
+		t.Run(string(rune(tt.code)), func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "http://localhost/", nil)
+			rec := httptest.NewRecorder()
+
+			err := m.serveErrorPage(rec, req, tt.code)
+			if err != nil {
+				t.Fatalf("serveErrorPage returned error: %v", err)
+			}
+
+			bodyStr := rec.Body.String()
+			isCap := strings.Contains(bodyStr, "Trace ID") || strings.Contains(bodyStr, "Trace-ID") || strings.Contains(bodyStr, "default-src") || strings.Contains(bodyStr, "ConnectionStatus")
+			if isCap != tt.shouldCap {
+				t.Errorf("code %d: captured=%v, expected=%v, body=%q", tt.code, isCap, tt.shouldCap, bodyStr)
+			}
+		})
+	}
+}
