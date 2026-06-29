@@ -3,6 +3,7 @@ package edge
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/rand"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
@@ -370,6 +371,58 @@ func (m *Edge) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 }
 
 func (m *Edge) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
+	traceHeader := "X-Catyuki-Lb-Id"
+	traceID := r.Header.Get(traceHeader)
+	if traceID == "" {
+		traceID = newTraceID()
+		r.Header.Set(traceHeader, traceID)
+	}
+	w.Header().Set(traceHeader, traceID)
+
+	// Convert ali-ip-country / EO-Client-IPCountry to X-Catyuki-IP-Country
+	var ipCountry string
+	if v := r.Header.Get("ali-ip-country"); v != "" {
+		ipCountry = v
+	} else if v := r.Header.Get("EO-Client-IPCountry"); v != "" {
+		ipCountry = v
+	}
+	// Case-insensitive search just in case
+	if ipCountry == "" {
+		for k, vv := range r.Header {
+			if (strings.EqualFold(k, "ali-ip-country") || strings.EqualFold(k, "EO-Client-IPCountry")) && len(vv) > 0 {
+				ipCountry = vv[0]
+				break
+			}
+		}
+	}
+	if ipCountry != "" {
+		r.Header.Set("X-Catyuki-IP-Country", ipCountry)
+		w.Header().Set("X-Catyuki-IP-Country", ipCountry)
+		r.Header.Del("ali-ip-country")
+		r.Header.Del("EO-Client-IPCountry")
+		for k := range r.Header {
+			if strings.EqualFold(k, "ali-ip-country") || strings.EqualFold(k, "EO-Client-IPCountry") {
+				r.Header.Del(k)
+			}
+		}
+	}
+
+	// Convert X-Request-ID / X-Req-ID etc. to X-Catyuki-Req-Id
+	reqID := findRequestID(r.Header, w.Header())
+	if reqID != "" {
+		r.Header.Set("X-Catyuki-Req-Id", reqID)
+		w.Header().Set("X-Catyuki-Req-Id", reqID)
+		candidates := []string{"requestid", "x-requestid", "x-request-id", "x-req-id", "requestID"}
+		for _, h := range candidates {
+			r.Header.Del(h)
+			for k := range r.Header {
+				if strings.EqualFold(k, h) {
+					r.Header.Del(k)
+				}
+			}
+		}
+	}
+
 	// Check CDN whitelist first - drop non-CDN requests silently
 	if m.cdnWhitelist != nil {
 		clientIP := getClientIP(r)
@@ -468,26 +521,10 @@ func (m *Edge) serveErrorPage(w http.ResponseWriter, r *http.Request, code int) 
 		return nil
 	}
 
-	applyBaseHeaders(w.Header(), m.XServer)
-
-	h := w.Header()
-	h.Del("Server")
-	h.Del("Via")
-	setNoStoreCacheHeaders(h)
-	h.Del("ETag")
-	h.Del("Content-Length")
-
-	if wantsHTML(r) {
-		h.Set("Content-Type", "text/html; charset=utf-8")
-		page := renderPage(r, code)
-		w.WriteHeader(code)
-		_, _ = w.Write(page)
-		return nil
-	}
-
+	body := renderError(w, r, code, m.XServer)
 	w.WriteHeader(code)
-	_, _ = w.Write([]byte(strconv.Itoa(code)))
-	return nil
+	_, err := w.Write(body)
+	return err
 }
 
 func getCaddyErrorStatus(r *http.Request) (int, bool) {
@@ -549,6 +586,24 @@ func (e *edgeRW) WriteHeader(code int) {
 	h.Del("Server")
 	h.Del("Via")
 
+	// Convert and normalize request ID headers on response
+	respReqID := findRequestID(e.req.Header, h)
+	if respReqID != "" {
+		h.Set("X-Catyuki-Req-Id", respReqID)
+		candidates := []string{"requestid", "x-requestid", "x-request-id", "x-req-id", "requestID"}
+		for _, name := range candidates {
+			var keysToDelete []string
+			for k := range h {
+				if strings.EqualFold(k, name) {
+					keysToDelete = append(keysToDelete, k)
+				}
+			}
+			for _, k := range keysToDelete {
+				h.Del(k)
+			}
+		}
+	}
+
 	// temp no-cache
 	if strings.HasPrefix(e.req.URL.Path, "/temp/") {
 		setNoStoreCacheHeaders(h)
@@ -601,20 +656,13 @@ func (e *edgeRW) WriteHeader(code int) {
 }
 
 func (e *edgeRW) serveInlineError(code int) {
-	h := e.Header()
-	setNoStoreCacheHeaders(h)
-	h.Del("ETag")
-	h.Del("Content-Length")
-
-	if wantsHTML(e.req) {
-		h.Set("Content-Type", "text/html; charset=utf-8")
-		page := renderPage(e.req, code)
-		e.ResponseWriter.WriteHeader(code)
-		_, _ = e.ResponseWriter.Write(page)
-		return
+	xServer := "Catyuki-CDN"
+	if e.cfg != nil && e.cfg.XServer != "" {
+		xServer = e.cfg.XServer
 	}
-
+	body := renderError(e.ResponseWriter, e.req, code, xServer)
 	e.ResponseWriter.WriteHeader(code)
+	_, _ = e.ResponseWriter.Write(body)
 }
 
 func (e *edgeRW) Write(p []byte) (int, error) {
@@ -718,20 +766,10 @@ func applyBaseHeaders(h http.Header, xServer string) {
 	h.Set("X-Server", xServer)
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("X-XSS-Protection", "1; mode=block")
-	h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
+	h.Set("Referrer-Policy", "same-origin")
+	h.Set("Expect-CT", "max-age=86400, enforce")
 	h.Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
 	h.Set("X-Robots-Tag", "noindex, nofollow")
-}
-
-func wantsHTML(r *http.Request) bool {
-	accept := strings.ToLower(strings.TrimSpace(r.Header.Get("Accept")))
-	if accept == "" {
-		return false
-	}
-	if strings.Contains(accept, "text/html") {
-		return true
-	}
-	return false
 }
 
 func detectLang(r *http.Request) string {
@@ -751,6 +789,9 @@ func detectLang(r *http.Request) string {
 }
 
 func pickTraceID(r *http.Request) string {
+	if v := strings.TrimSpace(r.Header.Get("X-Catyuki-Lb-Id")); v != "" {
+		return v
+	}
 	if v := strings.TrimSpace(r.Header.Get("Trace-ID")); v != "" {
 		return v
 	}
@@ -813,6 +854,14 @@ func htmlEscape(s string) string {
 func getClientIP(r *http.Request) string {
 	// Use RemoteAddr which is the direct connection IP (should be the CDN)
 	return r.RemoteAddr
+}
+
+func newTraceID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return strings.ReplaceAll(uuid.New().String(), "-", "")
+	}
+	return hex.EncodeToString(b[:])
 }
 
 var (

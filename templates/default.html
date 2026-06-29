@@ -1,0 +1,573 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta content="nofollow,noarchive,noindex" name="robots">
+    <title>{{ .Status }} {{ .Text }}</title>
+    <meta content="width=device-width, initial-scale=1" name="viewport">
+
+    <!-- Retry-friendly errors auto refresh -->
+    <!-- {{ if or (eq .Status 408) (eq .Status 425) (eq .Status 429) (eq .Status 500) (eq .Status 502) (eq .Status 503) (eq .Status 504) }} -->
+    <meta content="30" http-equiv="refresh">
+    <!-- {{ end }} -->
+
+    <style>
+        :root {
+            --bg: #fff;
+            --bg-soft: #fafafa;
+            --text: #000;
+            --muted: #666;
+            --subtle: #999;
+            --line: #d8d8d8;
+
+            --card-bg: #f7f7f7;
+            --card-border: #e8e8e8;
+
+            --ok-text: #137333;
+            --ok-bg: #eef8f1;
+
+            --warn-text: #9a6700;
+            --warn-bg: #fff8e6;
+
+            --error-text: #c5221f;
+            --error-bg: #fff0ef;
+
+            --radius: 14px;
+            --radius-sm: 10px;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html, body {
+            min-height: 100%;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background:
+                    radial-gradient(800px 420px at 50% -10%, var(--bg-soft), transparent 70%),
+                    var(--bg);
+            color: var(--text);
+            font-family: Arial, Helvetica, sans-serif;
+            font-size: 14px;
+        }
+
+        .wrap {
+            width: 100%;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 56px 20px;
+        }
+
+        main {
+            width: min(880px, 100%);
+            text-align: center;
+        }
+
+        .eyebrow {
+            margin-bottom: 10px;
+            color: var(--subtle);
+            font-size: 12px;
+            letter-spacing: .16em;
+            text-transform: uppercase;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: clamp(32px, 6vw, 56px);
+            line-height: 1.1;
+            font-weight: 400;
+            letter-spacing: -0.04em;
+        }
+
+        .message {
+            margin: 16px auto 0;
+            max-width: 560px;
+            color: var(--muted);
+            font-size: clamp(14px, 1.4vw, 16px);
+            line-height: 1.65;
+        }
+
+        hr {
+            border: 0;
+            border-top: 1px solid var(--line);
+            margin: 36px 0;
+        }
+
+        .status {
+            display: grid;
+            grid-template-columns: 1fr auto 1fr auto 1fr;
+            align-items: stretch;
+            gap: 14px;
+            margin: 0 0 36px;
+        }
+
+        .card {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            min-height: 116px;
+            padding: 22px 20px;
+            border: 1px solid var(--card-border);
+            border-radius: var(--radius);
+            background: var(--card-bg);
+            text-align: left;
+            transition: background .2s ease, border-color .2s ease, transform .2s ease;
+        }
+
+        .card.ok {
+            background: var(--ok-bg);
+            border-color: rgba(19, 115, 51, .12);
+        }
+
+        .card.warning {
+            background: var(--warn-bg);
+            border-color: rgba(154, 103, 0, .14);
+        }
+
+        .card.error {
+            background: var(--error-bg);
+            border-color: rgba(197, 34, 31, .14);
+        }
+
+        .icon {
+            width: 26px;
+            height: 26px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 14px;
+        }
+
+        .icon svg {
+            width: 26px;
+            height: 26px;
+            fill: currentColor;
+        }
+
+        .card.ok .icon,
+        .card.ok .status-text {
+            color: var(--ok-text);
+        }
+
+        .card.warning .icon,
+        .card.warning .status-text {
+            color: var(--warn-text);
+        }
+
+        .card.error .icon,
+        .card.error .status-text {
+            color: var(--error-text);
+        }
+
+        .caption {
+            margin-bottom: 6px;
+            color: var(--text);
+            font-size: 15px;
+            font-weight: 500;
+        }
+
+        .status-text {
+            margin: 0;
+            font-size: 13px;
+            line-height: 1.45;
+            font-weight: 600;
+        }
+
+        .arrow {
+            color: #b6b6b6;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .arrow svg {
+            width: 24px;
+            height: 24px;
+            fill: currentColor;
+        }
+
+        .reason {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            text-align: left;
+        }
+
+        .panel {
+            padding: 22px;
+            border: 1px solid var(--card-border);
+            border-radius: var(--radius);
+            background: #fff;
+            height: 100%;
+        }
+
+        .panel h2 {
+            margin: 0 0 10px;
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: .01em;
+        }
+
+        .panel p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.65;
+        }
+
+        footer {
+            margin-top: 32px;
+            padding-top: 24px;
+            border-top: 1px solid var(--line);
+            color: var(--subtle);
+            font-size: 12px;
+            text-align: center;
+        }
+
+        .server {
+            font-style: italic;
+        }
+
+        .details {
+            margin-top: 14px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .details div {
+            max-width: min(600px, 100%);
+            word-break: break-all;
+            padding: 5px 10px;
+            border-radius: var(--radius-sm);
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            font-size: 11.5px;
+            line-height: 1.4;
+        }
+
+        code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            color: #555;
+        }
+
+        .support-action {
+            margin-top: 24px;
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 10px 22px;
+            border-radius: var(--radius-sm);
+            background: var(--text);
+            color: var(--bg);
+            text-decoration: none;
+            font-size: 13px;
+            font-weight: 600;
+            border: 1px solid var(--text);
+            transition: opacity 0.2s ease, transform 0.2s ease;
+        }
+
+        .btn:hover {
+            opacity: 0.9;
+            transform: translateY(-1px);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        /* ----- Responsive breakpoints ----- */
+
+        /* Tablet: tighten spacing, keep 3-card row */
+        @media (max-width: 1024px) {
+            main {
+                width: min(680px, 100%);
+            }
+
+            .status {
+                gap: 10px;
+            }
+
+            .card {
+                padding: 18px 16px;
+                min-height: 104px;
+            }
+        }
+
+        /* Small tablet / large phone: stack status flow vertically, rotate arrows */
+        @media (max-width: 760px) {
+            .wrap {
+                align-items: flex-start;
+                padding-top: 48px;
+            }
+
+            .status {
+                grid-template-columns: 1fr;
+                gap: 0;
+            }
+
+            .status .card {
+                border-radius: 0;
+                min-height: auto;
+                padding: 16px 18px;
+            }
+
+            .status .card:first-child {
+                border-radius: var(--radius) var(--radius) 0 0;
+            }
+
+            .status .card:last-child {
+                border-radius: 0 0 var(--radius) var(--radius);
+            }
+
+            .status .card + .card,
+            .status .arrow + .card {
+                border-top: none;
+            }
+
+            .arrow {
+                margin: 0 auto;
+                background: var(--card-bg);
+                border-left: 1px solid var(--card-border);
+                border-right: 1px solid var(--card-border);
+                padding: 4px 0;
+                width: 100%;
+            }
+
+            .arrow svg {
+                transform: rotate(90deg);
+            }
+
+            .card {
+                text-align: center;
+                align-items: center;
+            }
+
+            .icon {
+                margin-bottom: 10px;
+            }
+
+            .reason {
+                grid-template-columns: 1fr;
+                gap: 12px;
+            }
+        }
+
+        /* Phone: compact everything further */
+        @media (max-width: 480px) {
+            .wrap {
+                padding: 36px 14px;
+            }
+
+            hr {
+                margin: 28px 0;
+            }
+
+            .status {
+                margin-bottom: 28px;
+            }
+
+            .details {
+                gap: 6px;
+            }
+
+            .details div {
+                font-size: 11px;
+                padding: 4px 9px;
+            }
+        }
+
+        /* Respect reduced motion */
+        @media (prefers-reduced-motion: reduce) {
+            .card {
+                transition: none;
+            }
+        }
+    </style>
+</head>
+
+<body>
+<div class="wrap">
+    <main>
+        <div class="eyebrow">{{ .I18n.ConnectionStatus }}</div>
+
+        <h1>{{ .Status }} {{ .Text }}</h1>
+
+        <p class="message" id="error-description">
+            {{ .ErrorDescription }}
+        </p>
+
+        <hr>
+
+        <section aria-label="{{ .I18n.ConnectionStatus }}" class="status">
+            <div class="card {{ .I18n.ClientCardState }}" id="client-status-card">
+                <i aria-hidden="true" class="icon">
+                    <svg viewBox="0 0 24 24">
+                        <path d="M0 0h24v24H0z" fill="none"/>
+                        <path d="M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.89-2-2-2zm0 14H5V8h14v10z"/>
+                    </svg>
+                </i>
+                <div class="caption">{{ .I18n.YourClient }}</div>
+                <p class="status-text">{{ .I18n.ClientCardText }}</p>
+            </div>
+
+            <div aria-hidden="true" class="arrow">
+                <svg viewBox="0 0 24 24">
+                    <path d="M7.41 13.41 6 12l-4 4 4 4 1.41-1.41L5.83 17H21v-2H5.83z"/>
+                    <path d="M16.59 10.59 18 12l4-4-4-4-1.41 1.41L18.17 7H3v2h15.17z"/>
+                </svg>
+            </div>
+
+            <div class="card {{ .I18n.NetworkCardState }}" id="network-status-card">
+                <i aria-hidden="true" class="icon">
+                    <svg viewBox="0 0 24 24">
+                        <path d="M0 0h24v24H0z" fill="none"/>
+                        <path d="M12 6c2.62 0 4.88 1.86 5.39 4.43l.3 1.5 1.53.11c1.56.1 2.78 1.41 2.78 2.96 0 1.65-1.35 3-3 3H6c-2.21 0-4-1.79-4-4 0-2.05 1.53-3.76 3.56-3.97l1.07-.11.5-.95C8.08 7.14 9.94 6 12 6m0-2C9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96C18.67 6.59 15.64 4 12 4z"/>
+                    </svg>
+                </i>
+                <div class="caption">{{ .I18n.Network }}</div>
+                <p class="status-text">{{ .I18n.NetworkCardText }}</p>
+            </div>
+
+            <div aria-hidden="true" class="arrow">
+                <svg viewBox="0 0 24 24">
+                    <path d="M7.41 13.41 6 12l-4 4 4 4 1.41-1.41L5.83 17H21v-2H5.83z"/>
+                    <path d="M16.59 10.59 18 12l4-4-4-4-1.41 1.41L18.17 7H3v2h15.17z"/>
+                </svg>
+            </div>
+
+            <div class="card {{ .I18n.ServerCardState }}" id="server-status-card">
+                <i aria-hidden="true" class="icon">
+                    <svg viewBox="0 0 24 24">
+                        <path d="M0 0h24v24H0z" fill="none"/>
+                        <path d="M19 15v4H5v-4h14m1-2H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1v-6c0-.55-.45-1-1-1zM7 18.5c-.82 0-1.5-.67-1.5-1.5s.68-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zM19 5v4H5V5h14m1-2H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1V4c0-.55-.45-1-1-1zM7 8.5c-.82 0-1.5-.67-1.5-1.5S6.18 5.5 7 5.5s1.5.68 1.5 1.5S7.83 8.5 7 8.5z"/>
+                    </svg>
+                </i>
+                <div class="caption">{{ .I18n.WebServer }}</div>
+                <p class="status-text">{{ .I18n.ServerCardText }}</p>
+            </div>
+        </section>
+
+        <section class="reason">
+            <div class="panel">
+                <h2>{{ .I18n.WhatHappened }}</h2>
+                <p id="what-happened">{{ .I18n.Description }}</p>
+            </div>
+
+            <div class="panel">
+                <h2>{{ .I18n.WhatCanIDo }}</h2>
+                <p id="what-to-do">{{ .I18n.WhatToDo }}</p>
+            </div>
+        </section>
+
+        <footer>
+            <div class="server">{{ .Server }}</div>
+
+            <!-- Optional request metadata -->
+            <div class="details">
+                <!-- {{ if .Host }} -->
+                <div>{{ .I18n.Host }}: <code>{{ .Host }}</code></div>
+                <!-- {{ end }} -->
+
+                <!-- {{ if .OriginalURI }} -->
+                <div>{{ .I18n.OriginalURI }}: <code>{{ .OriginalURI }}</code></div>
+                <!-- {{ end }} -->
+
+                <!-- {{ if .TraceID }} -->
+                <div>{{ .I18n.TraceID }}: <code>{{ .TraceID }}</code></div>
+                <!-- {{ end }} -->
+
+                <!-- {{ if .RequestID }} -->
+                <div>{{ .I18n.RequestID }}: <code>{{ .RequestID }}</code></div>
+                <!-- {{ end }} -->
+
+                <!-- {{ if .EdgeID }} -->
+                <div id="edge-id-box">{{ .I18n.EdgeID }}: <code>{{ .EdgeID }}</code></div>
+                <!-- {{ end }} -->
+            </div>
+
+            <div class="support-action">
+                <a id="support-btn" href="mailto:support@catyuki.com" class="btn">{{ .I18n.ContactSupport }}</a>
+            </div>
+        </footer>
+    </main>
+</div>
+
+<script>
+    // Connection status and messages are fully localized and rendered on the server side.
+    const errorCode = parseInt(`{{ .Status }}`, 10);
+    const message = `{{ .Text }}`.trim();
+
+    // Dynamically construct and update the support mailto link with trace IDs
+    function updateSupportLink() {
+        const supportBtn = document.getElementById('support-btn');
+        if (!supportBtn) return;
+
+        const hostVal = `{{ .Host }}`.trim();
+        const uriVal = `{{ .OriginalURI }}`.trim();
+        const traceVal = `{{ .TraceID }}`.trim();
+        const reqVal = `{{ .RequestID }}`.trim();
+
+        // Edge ID might be dynamically added, so let's get it from the DOM
+        const edgeEl = document.getElementById('edge-id-box');
+        let edgeVal = "";
+        if (edgeEl) {
+            const codeEl = edgeEl.querySelector('code');
+            if (codeEl) edgeVal = codeEl.textContent.trim();
+        } else {
+            edgeVal = `{{ .EdgeID }}`.trim();
+        }
+
+        let bodyText = "Hello Catyuki Support,\r\n\r\nI encountered an error while browsing. Here are the technical details:\r\n\r\n";
+        bodyText += `- Error Status: ${errorCode} ${message}\r\n`;
+        if (hostVal) bodyText += `- Host: ${hostVal}\r\n`;
+        if (uriVal) bodyText += `- Original URI: ${uriVal}\r\n`;
+        if (traceVal) bodyText += `- Trace ID: ${traceVal}\r\n`;
+        if (reqVal) bodyText += `- Request ID: ${reqVal}\r\n`;
+        if (edgeVal) bodyText += `- Edge ID: ${edgeVal}\r\n`;
+        bodyText += "\r\n[Please describe what happened here]\r\n";
+
+        const subject = `Error Report: ${errorCode} ${message}`;
+        supportBtn.href = `mailto:support@catyuki.com?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(bodyText)}`;
+    }
+
+    // Initialize the support link
+    updateSupportLink();
+
+    // Check if Edge ID is already rendered by the server.
+    // If not, try to fetch the headers dynamically to see if a downstream CDN/Edge proxy injected it in the response headers.
+    if (!document.getElementById('edge-id-box')) {
+        fetch(window.location.href, { method: 'HEAD' })
+            .then(res => {
+                const edgeId = res.headers.get('x-catyuki-edge-id');
+                if (edgeId) {
+                    const detailsDiv = document.querySelector('.details');
+                    if (detailsDiv) {
+                        const newBox = document.createElement('div');
+                        newBox.id = 'edge-id-box';
+                        newBox.innerHTML = `{{ .I18n.EdgeID }}: <code>${escapeHtml(edgeId)}</code>`;
+                        detailsDiv.appendChild(newBox);
+                        // Re-update the support link to include the dynamically fetched Edge ID
+                        updateSupportLink();
+                    }
+                }
+            })
+            .catch(err => console.warn('Failed to fetch edge ID:', err));
+    }
+
+    function escapeHtml(str) {
+        return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+    }
+</script>
+</body>
+</html>
