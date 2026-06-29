@@ -47,12 +47,12 @@ func TestWantsHTML(t *testing.T) {
 		accept   string
 		expected bool
 	}{
-		{"Browser standard", "text/html,application/xhtml+xml,application/xml;q=0.9", false}, // contains xml
-		{"Accept with xml only", "application/xml", false},                                  // contains xml
-		{"Accept with application/xhtml+xml", "application/xhtml+xml", false},               // contains xml
-		{"Accept not containing xml", "text/html,application/json;q=0.9", false},            // wait, wantsJSON is true here!
-		{"Browser accept without xml", "text/html,image/webp,*/*", true},                    // does not contain xml
-		{"Empty Accept", "", true},                                                          // does not contain xml
+		{"Browser standard", "text/html,application/xhtml+xml,application/xml;q=0.9", true}, // contains text/html, should be true!
+		{"Accept with xml only", "application/xml", false},                                  // contains xml, no text/html
+		{"Accept with application/xhtml+xml", "application/xhtml+xml", false},               // contains xml, no text/html
+		{"Accept not containing xml", "text/html,application/json;q=0.9", false},            // wantsJSON is true, so wantsHTML is false
+		{"Browser accept without xml", "text/html,image/webp,*/*", true},                    // contains text/html, should be true
+		{"Empty Accept", "", true},                                                          // no xml, defaults to true
 	}
 
 	for _, tt := range tests {

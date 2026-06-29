@@ -219,6 +219,9 @@ func wantsHTML(r *http.Request) bool {
 		return false
 	}
 	accept := strings.ToLower(r.Header.Get("Accept"))
+	if strings.Contains(accept, "text/html") {
+		return true
+	}
 	if !strings.Contains(accept, "xml") {
 		return true
 	}
