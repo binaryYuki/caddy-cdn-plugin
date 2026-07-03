@@ -45,7 +45,7 @@ jobs:
 
           VERSION="${GITHUB_REF_NAME}"
           OUT="caddy-${VERSION}-${GOOS}-${GOARCH}"
-          LD_PKG="github.com/binaryyuki/caddy-cdn-plugin/edge"
+          LD_PKG="github.com/binaryyuki/caddy-cdn-plugin"
 
           export XCADDY_GO_BUILD_FLAGS="-trimpath -tags nobadger,nomysql,nopgx -ldflags '-w -s -X ${LD_PKG}.releaseTag=${VERSION}'"
 
