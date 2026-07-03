@@ -134,6 +134,9 @@ func TestRenderError(t *testing.T) {
 	if got := h.Get("Cache-Control"); got != "no-store, max-age=0" {
 		t.Errorf("Cache-Control = %q, want %q", got, "no-store, max-age=0")
 	}
+	if got := h.Get("X-Catyuki-Proxy-Ver"); got == "" {
+		t.Errorf("expected X-Catyuki-Proxy-Ver header to be set, got empty")
+	}
 
 	// Verify body contains some variables
 	bodyStr := string(body)

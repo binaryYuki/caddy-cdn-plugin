@@ -825,6 +825,9 @@ func applyBaseHeaders(h http.Header, xServer string) {
 	h.Set("Expect-CT", "max-age=86400, enforce")
 	h.Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
 	h.Set("X-Robots-Tag", "noindex, nofollow")
+	if ver := getProxyVersion(); ver != "" {
+		h.Set("X-Catyuki-Proxy-Ver", ver)
+	}
 }
 
 func detectLang(r *http.Request) string {
