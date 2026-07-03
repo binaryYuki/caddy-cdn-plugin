@@ -218,12 +218,58 @@ func wantsHTML(r *http.Request) bool {
 	if wantsJSON(r) {
 		return false
 	}
+	if isCLIOrLibrary(r.Header.Get("User-Agent")) {
+		return false
+	}
 	accept := strings.ToLower(r.Header.Get("Accept"))
 	if strings.Contains(accept, "text/html") {
 		return true
 	}
 	if !strings.Contains(accept, "xml") {
 		return true
+	}
+	return false
+}
+
+func isCLIOrLibrary(userAgent string) bool {
+	ua := strings.ToLower(userAgent)
+	indicators := []string{
+		"curl",
+		"wget",
+		"httpie",
+		"go-http-client",
+		"python",
+		"okhttp",
+		"apache-httpclient",
+		"node-fetch",
+		"axios",
+		"postman",
+		"bruno",
+		"thunder-client",
+		"java",
+		"perl",
+		"ruby",
+		"golang",
+		"php/",
+		"guzzle",
+		"curlphp",
+		"net-http",
+		"rest-client",
+		"http-kit",
+		"faraday",
+		"unirest",
+		"reqwest",
+		"hyper",
+		"sf",
+		"curl-agent",
+		"playwright",
+		"puppeteer",
+		"selenium",
+	}
+	for _, ind := range indicators {
+		if strings.Contains(ua, ind) {
+			return true
+		}
 	}
 	return false
 }

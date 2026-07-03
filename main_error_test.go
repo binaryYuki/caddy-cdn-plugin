@@ -69,6 +69,39 @@ func TestWantsHTML(t *testing.T) {
 	}
 }
 
+func TestWantsHTML_UserAgents(t *testing.T) {
+	tests := []struct {
+		name      string
+		userAgent string
+		accept    string
+		expected  bool
+	}{
+		{"Browser agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "text/html", true},
+		{"curl agent", "curl/7.68.0", "text/html", false},
+		{"wget agent", "Wget/1.20.3 (linux-gnu)", "", false},
+		{"python agent", "python-requests/2.25.1", "*/*", false},
+		{"java agent", "Java/1.8.0_292", "text/html, image/gif, image/jpeg, *; q=.2, */*; q=.2", false},
+		{"go-http-client agent", "Go-http-client/1.1", "", false},
+		{"axios agent", "Axios/0.21.1", "application/json, text/plain, */*", false},
+		{"postman agent", "PostmanRuntime/7.26.8", "*/*", false},
+		{"reqwest Rust agent", "reqwest/0.11.4", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "http://localhost/", nil)
+			req.Header.Set("User-Agent", tt.userAgent)
+			if tt.accept != "" {
+				req.Header.Set("Accept", tt.accept)
+			}
+			got := wantsHTML(req)
+			if got != tt.expected {
+				t.Errorf("wantsHTML() = %v, want %v for User-Agent=%q, Accept=%q", got, tt.expected, tt.userAgent, tt.accept)
+			}
+		})
+	}
+}
+
 func TestRenderError(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "http://localhost/not-found", nil)
 	req.Header.Set("X-Request-ID", "test-request-id-12345")
