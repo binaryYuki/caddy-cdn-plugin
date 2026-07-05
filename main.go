@@ -600,7 +600,8 @@ type edgeRW struct {
 	status      int
 	notModified bool // 304 response, skip body
 
-	isLogoJPG bool
+	isLogoJPG   bool
+	intercepted bool
 }
 
 func (e *edgeRW) WriteHeader(code int) {
@@ -685,23 +686,10 @@ func (e *edgeRW) WriteHeader(code int) {
 		}
 	}
 
-	if e.cfg != nil && (wantsHTML(e.req) || wantsJSON(e.req)) {
-		if e.cfg.Custom400 && code == http.StatusBadRequest {
-			e.serveInlineError(code)
-			return
-		}
-		if e.cfg.Custom403 && code == http.StatusForbidden {
-			e.serveInlineError(code)
-			return
-		}
-		if e.cfg.Custom404 && code == http.StatusNotFound {
-			e.serveInlineError(code)
-			return
-		}
-		if e.cfg.Custom502 && code >= 500 {
-			e.serveInlineError(code)
-			return
-		}
+	if shouldInterceptError(e.req, h, code, e.cfg) {
+		e.intercepted = true
+		e.serveInlineError(code)
+		return
 	}
 
 	e.ResponseWriter.WriteHeader(code)
@@ -727,11 +715,7 @@ func (e *edgeRW) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 
-	if e.cfg != nil && (wantsHTML(e.req) || wantsJSON(e.req)) && (
-		(e.cfg.Custom404 && e.status == http.StatusNotFound) ||
-		(e.cfg.Custom403 && e.status == http.StatusForbidden) ||
-		(e.cfg.Custom400 && e.status == http.StatusBadRequest) ||
-		(e.cfg.Custom502 && e.status >= 500)) {
+	if e.intercepted {
 		return len(p), nil
 	}
 
@@ -927,3 +911,50 @@ var (
 	_ caddyhttp.MiddlewareHandler = (*Edge)(nil)
 	_ caddyfile.Unmarshaler       = (*Edge)(nil)
 )
+
+func shouldInterceptError(req *http.Request, respHeader http.Header, code int, cfg *Edge) bool {
+	if cfg == nil {
+		return false
+	}
+
+	// 1. Check if the status code configuration allows interception
+	allowed := false
+	if cfg.Custom400 && code == http.StatusBadRequest {
+		allowed = true
+	} else if cfg.Custom403 && code == http.StatusForbidden {
+		allowed = true
+	} else if cfg.Custom404 && code == http.StatusNotFound {
+		allowed = true
+	} else if cfg.Custom502 && code >= 500 {
+		allowed = true
+	}
+	if !allowed {
+		return false
+	}
+
+	// 2. We only intercept requests that want HTML or JSON
+	if !wantsHTML(req) && !wantsJSON(req) {
+		return false
+	}
+
+	// 3. Do not intercept if it's an AWS / S3 API request
+	for k := range req.Header {
+		if strings.HasPrefix(strings.ToLower(k), "x-amz-") {
+			return false
+		}
+	}
+	auth := strings.ToLower(req.Header.Get("Authorization"))
+	if strings.HasPrefix(auth, "aws") {
+		return false
+	}
+
+	// 4. Do not intercept if the original response Content-Type is XML or JSON
+	if respHeader != nil {
+		originalCT := strings.ToLower(respHeader.Get("Content-Type"))
+		if strings.Contains(originalCT, "xml") || strings.Contains(originalCT, "json") {
+			return false
+		}
+	}
+
+	return true
+}

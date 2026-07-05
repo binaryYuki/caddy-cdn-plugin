@@ -283,3 +283,82 @@ func TestServeErrorPage_Codes(t *testing.T) {
 		})
 	}
 }
+
+func TestShouldInterceptError(t *testing.T) {
+	cfg := &Edge{
+		Custom400: true,
+		Custom403: true,
+		Custom404: true,
+		Custom502: true,
+	}
+
+	tests := []struct {
+		name       string
+		method     string
+		reqHeaders map[string]string
+		resHeaders map[string]string
+		code       int
+		expected   bool
+	}{
+		{
+			name:     "Standard HTML client 404 request - should intercept",
+			method:   "GET",
+			reqHeaders: map[string]string{"Accept": "text/html"},
+			resHeaders: map[string]string{"Content-Type": "text/plain"},
+			code:     404,
+			expected: true,
+		},
+		{
+			name:     "S3 request with x-amz- header - should NOT intercept",
+			method:   "GET",
+			reqHeaders: map[string]string{"Accept": "text/html", "x-amz-date": "20260705T180736Z"},
+			resHeaders: map[string]string{"Content-Type": "text/plain"},
+			code:     403,
+			expected: false,
+		},
+		{
+			name:     "S3 request with AWS auth header - should NOT intercept",
+			method:   "GET",
+			reqHeaders: map[string]string{"Accept": "text/html", "Authorization": "AWS4-HMAC-SHA256 Credential=xxx"},
+			resHeaders: map[string]string{"Content-Type": "text/plain"},
+			code:     403,
+			expected: false,
+		},
+		{
+			name:     "Original response is XML - should NOT intercept",
+			method:   "GET",
+			reqHeaders: map[string]string{"Accept": "text/html"},
+			resHeaders: map[string]string{"Content-Type": "application/xml; charset=utf-8"},
+			code:     404,
+			expected: false,
+		},
+		{
+			name:     "Original response is JSON - should NOT intercept",
+			method:   "GET",
+			reqHeaders: map[string]string{"Accept": "text/html"},
+			resHeaders: map[string]string{"Content-Type": "application/json"},
+			code:     500,
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, "http://localhost/", nil)
+			for k, v := range tt.reqHeaders {
+				req.Header.Set(k, v)
+			}
+
+			resH := http.Header{}
+			for k, v := range tt.resHeaders {
+				resH.Set(k, v)
+			}
+
+			got := shouldInterceptError(req, resH, tt.code, cfg)
+			if got != tt.expected {
+				t.Errorf("shouldInterceptError() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
