@@ -536,6 +536,11 @@ func (m *Edge) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.
 }
 
 func (m *Edge) serveErrorPage(w http.ResponseWriter, r *http.Request, code int) error {
+	if r.Method == http.MethodHead {
+		w.WriteHeader(code)
+		return nil
+	}
+
 	if code == http.StatusNotFound && !m.Custom404 {
 		w.WriteHeader(code)
 		return nil
@@ -914,6 +919,11 @@ var (
 
 func shouldInterceptError(req *http.Request, respHeader http.Header, code int, cfg *Edge) bool {
 	if cfg == nil {
+		return false
+	}
+
+	// 0. Do not intercept HEAD requests (they have no body)
+	if req.Method == http.MethodHead {
 		return false
 	}
 

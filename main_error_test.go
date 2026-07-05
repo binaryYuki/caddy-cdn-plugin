@@ -340,6 +340,14 @@ func TestShouldInterceptError(t *testing.T) {
 			code:     500,
 			expected: false,
 		},
+		{
+			name:     "HEAD request - should NOT intercept",
+			method:   "HEAD",
+			reqHeaders: map[string]string{"Accept": "text/html"},
+			resHeaders: map[string]string{"Content-Type": "text/plain"},
+			code:     404,
+			expected: false,
+		},
 	}
 
 	for _, tt := range tests {
